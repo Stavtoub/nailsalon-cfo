@@ -326,14 +326,14 @@ import urllib.error
 
 DEFAULT_MODELS_BY_PROVIDER = {
     "Google Gemini": [
+        "gemini-3.8-flash",
         "gemini-3.1-pro-preview",
         "gemini-4-argon",
-        "gemini-3.8-flash",
         "gemini-pro-latest",
         "gemini-flash-latest",
         "gemini-3-flash-preview",
-        "gemini-2.5-pro",
-        "gemini-2.5-flash"
+        "gemini-2.5-flash",
+        "gemini-2.5-pro"
     ],
     "OpenAI (ChatGPT)": [
         "gpt-5",
@@ -437,11 +437,11 @@ def _extract_multimodal_parts(contents):
                 mime_t = item.get("mime_type", "image/png")
     return "\n".join(text_parts), img_bytes, mime_t
 
-def call_gemini_smart(api_key, contents, expect_json=False, preferred_model="gemini-2.5-pro", provider="auto"):
+def call_gemini_smart(api_key, contents, expect_json=False, preferred_model="gemini-3.8-flash", provider="auto", thinking_level="HIGH"):
     """
     Κεντρικός δρομολογητής AI CFO:
-    Υποστηρίζει Google Gemini (Pro & Flash), OpenAI ChatGPT (gpt-5, o3, gpt-4.1, gpt-4o) και Anthropic Claude (Sonnet/Opus),
-    καθώς και οποιοδήποτε μελλοντικό/custom μοντέλο.
+    Υποστηρίζει Google Gemini (gemini-3.8-flash με thinking=HIGH, Pro & Flash), OpenAI ChatGPT και Anthropic Claude.
+    Προεπιλογή: gemini-3.8-flash με thinking=HIGH για μέγιστη ευφυΐα και ελάχιστο κόστος.
     """
     prov = detect_ai_provider(api_key, preferred_model, provider)
 
@@ -470,8 +470,11 @@ def call_gemini_smart(api_key, contents, expect_json=False, preferred_model="gem
                         {"role": "user", "content": user_content}
                     ]
                 }
+                if m_name.startswith(("o1", "o3", "o4", "gpt-5")):
+                    if thinking_level and str(thinking_level).upper() != "OFF":
+                        payload["reasoning_effort"] = str(thinking_level).lower() if str(thinking_level).lower() in ("high", "medium", "low") else "high"
+
                 if expect_json and not img_bytes and not m_name.startswith(("o1", "o3")):
-                    # Αν το prompt ζητάει JSON λίστα ή αντικείμενο, προσθέτουμε σαφή οδηγία
                     payload["messages"][0]["content"] += " Επέστρεψε αποκλειστικά έγκυρο JSON χωρίς markdown backticks."
 
                 req = urllib.request.Request(
@@ -546,41 +549,70 @@ def call_gemini_smart(api_key, contents, expect_json=False, preferred_model="gem
                 raise e
         raise last_err
 
-    # 3. Google Gemini (Pro, Argon & Flash με έξυπνο fallback αν υπάρξει 404 ή Free-Tier Quota 429 σε συγκεκριμένο μοντέλο)
+    # 3. Google Gemini (gemini-3.8-flash, Thinking=HIGH, με έξυπνο fallback αν υπάρξει 404 ή Quota 429)
     client = genai.Client(api_key=api_key)
     candidate_models = [
         preferred_model,
-        "gemini-3.1-pro-preview",
         "gemini-3.8-flash",
+        "gemini-3.1-pro-preview",
         "gemini-4-argon",
         "gemini-pro-latest",
         "gemini-flash-latest",
-        "gemini-3-flash-preview"
+        "gemini-3-flash-preview",
+        "gemini-2.5-flash",
+        "gemini-2.5-pro"
     ]
     seen = set()
     ordered_models = [m for m in candidate_models if m and not (m in seen or seen.add(m))]
 
-    cfg = types.GenerateContentConfig(response_mime_type="application/json") if expect_json else None
+    def _build_gemini_config(with_thinking=True):
+        if not GENAI_AVAILABLE:
+            return None
+        kwargs = {}
+        if expect_json:
+            kwargs["response_mime_type"] = "application/json"
+        if with_thinking and thinking_level and str(thinking_level).upper() != "OFF":
+            t_str = str(thinking_level).upper()
+            t_enum = getattr(types.ThinkingLevel, t_str, types.ThinkingLevel.HIGH)
+            try:
+                kwargs["thinking_config"] = types.ThinkingConfig(thinking_level=t_enum)
+            except Exception:
+                try:
+                    kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=-1)
+                except Exception:
+                    pass
+        return types.GenerateContentConfig(**kwargs) if kwargs else None
+
     last_err = None
 
     for m_name in ordered_models:
         try:
+            cfg = _build_gemini_config(with_thinking=True)
             resp = client.models.generate_content(model=m_name, contents=contents, config=cfg)
             return resp.text, m_name
         except Exception as e:
-            last_err = e
             err_str = str(e)
+            if "thinking" in err_str.lower() or "thought" in err_str.lower():
+                try:
+                    cfg_no_th = _build_gemini_config(with_thinking=False)
+                    resp = client.models.generate_content(model=m_name, contents=contents, config=cfg_no_th)
+                    return resp.text, m_name
+                except Exception as e2:
+                    e = e2
+                    err_str = str(e2)
+            last_err = e
             if any(tok in err_str for tok in ("404", "NOT_FOUND", "no longer available", "429", "RESOURCE_EXHAUSTED", "quota")):
                 continue
             else:
                 raise e
 
     try:
+        cfg_fallback = _build_gemini_config(with_thinking=False)
         for m in client.models.list():
             m_id = getattr(m, "name", "").replace("models/", "")
-            if "gemini" in m_id and ("pro" in m_id or "flash" in m_id) and "embedding" not in m_id:
+            if "gemini" in m_id and ("flash" in m_id or "pro" in m_id) and "embedding" not in m_id:
                 try:
-                    resp = client.models.generate_content(model=m_id, contents=contents, config=cfg)
+                    resp = client.models.generate_content(model=m_id, contents=contents, config=cfg_fallback)
                     return resp.text, m_id
                 except Exception:
                     continue
@@ -1270,7 +1302,7 @@ with st.sidebar:
                 else:
                     st.warning("Δεν βρέθηκαν επιπλέον μοντέλα ή το κλειδί δεν επέστρεψε λίστα.")
 
-        base_models = DEFAULT_MODELS_BY_PROVIDER.get(ai_provider_choice, ["gemini-2.5-pro"])
+        base_models = DEFAULT_MODELS_BY_PROVIDER.get(ai_provider_choice, ["gemini-3.8-flash"])
         live_models = st.session_state["live_models_by_prov"].get(ai_provider_choice, [])
         merged_models = []
         for m_item in (base_models + live_models):
@@ -1280,20 +1312,34 @@ with st.sidebar:
         merged_models.append(CUSTOM_MODEL_OPT)
 
         chosen_model_opt = st.selectbox(
-            "Μοντέλο AI (Προεπιλογή: Κορυφαίο Pro/Reasoning)",
+            "Μοντέλο AI (Προεπιλογή: Gemini 3.8 Flash • High Thinking)",
             options=merged_models,
             index=0,
-            help="Επιλέξτε από τη λίστα, πατήστε 'Ζωντανή Φόρτωση' για να δείτε όλα τα νέα μοντέλα του API, ή επιλέξτε 'Άλλο' για να γράψετε οποιοδήποτε όνομα μοντέλου!"
+            help="Προεπιλεγμένο μοντέλο: gemini-3.8-flash (ταχύτατο, οικονομικό και κορυφαίο σε συλλογισμό). Μπορείτε να επιλέξετε Pro/Argon ή οποιοδήποτε άλλο μοντέλο."
         )
         if chosen_model_opt == CUSTOM_MODEL_OPT:
             custom_m_typed = st.text_input(
                 "Πληκτρολογήστε το ακριβές ID μοντέλου",
                 value=base_models[0],
-                placeholder="π.χ. gemini-2.5-pro, o3, gpt-5, claude-sonnet-4-6"
+                placeholder="π.χ. gemini-3.8-flash, o3, gpt-5, claude-sonnet-4-6"
             )
             selected_gemini_model = custom_m_typed.strip() or base_models[0]
         else:
             selected_gemini_model = chosen_model_opt
+
+        sel_thinking_opt = st.selectbox(
+            "🧠 Επίπεδο Συλλογισμού AI (Thinking)",
+            options=["HIGH (Υψηλό - Μέγιστη Εμβάθυνση)", "MEDIUM (Ισορροπημένο)", "LOW (Γρήγορο)", "OFF (Ανενεργό)"],
+            index=0,
+            help="Ελέγχει το βάθος συλλογισμού (extended thinking / reasoning tokens) του Gemini 3.8 Flash. Προεπιλογή: HIGH."
+        )
+        selected_thinking_level = "HIGH"
+        if "MEDIUM" in sel_thinking_opt:
+            selected_thinking_level = "MEDIUM"
+        elif "LOW" in sel_thinking_opt:
+            selected_thinking_level = "LOW"
+        elif "OFF" in sel_thinking_opt:
+            selected_thinking_level = "OFF"
 
     if st.button("Ανανέωση Δεδομένων Βάσης", icon=":material/refresh:", width="stretch"):
         refresh_data()
@@ -2879,7 +2925,9 @@ with tab_cfo:
                             api_key=gemini_api_key,
                             contents=prompt_hybrid,
                             expect_json=True,
-                            preferred_model=selected_gemini_model
+                            preferred_model=selected_gemini_model,
+                            provider=ai_provider_choice,
+                            thinking_level=selected_thinking_level
                         )
                         parsed_cards = clean_json_response(raw_ai_json)
                         if isinstance(parsed_cards, list) and len(parsed_cards) > 0:
@@ -3739,7 +3787,8 @@ with tab_sim:
                                 contents=prompt_cfo,
                                 expect_json=False,
                                 preferred_model=selected_gemini_model,
-                                provider=ai_provider_choice
+                                provider=ai_provider_choice,
+                                thinking_level=selected_thinking_level
                             )
                             audit_obj = {
                                 "period": period_label,
@@ -3878,7 +3927,8 @@ with tab_admin:
                                         contents=[img_part, prompt_vis],
                                         expect_json=True,
                                         preferred_model=selected_gemini_model,
-                                        provider=ai_provider_choice
+                                        provider=ai_provider_choice,
+                                        thinking_level=selected_thinking_level
                                     )
                                     parsed_json = clean_json_response(raw_txt)
                                     raw_mon = parsed_json.get("monday_date", "2026-10-19")
