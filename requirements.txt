@@ -1,0 +1,6 @@
+streamlit>=1.42.0
+supabase
+pandas
+numpy
+plotly
+google-genai
