@@ -661,6 +661,385 @@ def save_multiple_week_schedules_to_db(schedules_map, update_default=False):
             supabase.table("config_services").upsert(payloads[i:i+50]).execute()
     return len(dedup_map)
 
+# --- 4Β. ΕΠΙΣΗΜΟ ΜΗΤΡΩΟ ΜΙΣΘΟΔΟΣΙΑΣ & ΚΟΣΤΟΛΟΓΗΣΗΣ ΠΡΟΣΩΠΙΚΟΥ (ΑΠΟ ΤΙΣ ΜΙΣΘΟΔΟΤΙΚΕΣ ΚΑΤΑΣΤΑΣΕΙΣ 2024-2026) ---
+DEFAULT_PAYROLL_LEDGER = [
+    {
+        "staff_name": "Κατερίνα Π.",
+        "payroll_code": "MCN002 - ΑΙΚΑΤΕΡΙΝΗ ΠΑΥΛΟΣ",
+        "role_type": "Τεχνίτρια",
+        "is_active": True,
+        "weekly_hours_declared": 40.0,
+        "nominal_gross": 1012.00,
+        "monthly_net_pocket": 916.47,
+        "monthly_efka_tax": 316.19,
+        "monthly_employer_regular": 1232.66,
+        "monthly_employer_full_14": 1438.10,
+        "hourly_cost": 8.63,
+        "cost_2024": 0.00,
+        "net_2024": 0.00,
+        "cost_2025": 13706.26,
+        "net_2025": 10114.06,
+        "cost_2026_jan_aug": 10411.70,
+        "net_2026_jan_aug": 7722.12,
+        "cost_2026_sep": 1232.66,
+        "net_2026_sep": 916.47,
+        "notes": "Πλήρης απασχόληση (40h/εβδ.). Τακτικό κόστος 1.232,66€/μήνα (916,47€ καθαρά στην τσέπη)."
+    },
+    {
+        "staff_name": "Κατερίνα",
+        "payroll_code": "MCN009 - ΑΙΚΑΤΕΡΙΝΗ ΓΕΩΡΓΙΟΣ (2024: MCN002)",
+        "role_type": "Τεχνίτρια",
+        "is_active": True,
+        "weekly_hours_declared": 40.0,
+        "nominal_gross": 920.00,
+        "monthly_net_pocket": 836.58,
+        "monthly_efka_tax": 283.89,
+        "monthly_employer_regular": 1120.47,
+        "monthly_employer_full_14": 1307.22,
+        "hourly_cost": 7.84,
+        "cost_2024": 8107.25,
+        "net_2024": 5931.72,
+        "cost_2025": 912.85,
+        "net_2025": 677.77,
+        "cost_2026_jan_aug": 9975.31,
+        "net_2026_jan_aug": 7466.00,
+        "cost_2026_sep": 1120.47,
+        "net_2026_sep": 836.58,
+        "notes": "Πλήρης απασχόληση (40h/εβδ.). Τακτικό κόστος 1.120,47€/μήνα (836,58€ καθαρά στην τσέπη)."
+    },
+    {
+        "staff_name": "Δόμνα",
+        "payroll_code": "MCN010 - ΔΟΜΝΙΚΗ ΑΘΑΝΑΣΙΟΣ",
+        "role_type": "Τεχνίτρια",
+        "is_active": True,
+        "weekly_hours_declared": 40.0,
+        "nominal_gross": 920.00,
+        "monthly_net_pocket": 859.24,
+        "monthly_efka_tax": 201.06,
+        "monthly_employer_regular": 1060.30,
+        "monthly_employer_full_14": 1237.02,
+        "hourly_cost": 7.42,
+        "cost_2024": 0.00,
+        "net_2024": 0.00,
+        "cost_2025": 2059.87,
+        "net_2025": 1636.53,
+        "cost_2026_jan_aug": 9333.39,
+        "net_2026_jan_aug": 7566.03,
+        "cost_2026_sep": 1060.30,
+        "net_2026_sep": 859.24,
+        "notes": "Πλήρης απασχόληση (40h/εβδ., μειωμένος ΕΦΚΑ). Τακτικό κόστος 1.060,30€/μήνα (859,24€ καθαρά)."
+    },
+    {
+        "staff_name": "Αντιγόνη",
+        "payroll_code": "MCN012 - ΑΝΤΙΓΟΝΗ ΣΤΥΛΙΑΝΟΣ",
+        "role_type": "Τεχνίτρια",
+        "is_active": True,
+        "weekly_hours_declared": 21.0,
+        "nominal_gross": 485.76,
+        "monthly_net_pocket": 433.55,
+        "monthly_efka_tax": 142.68,
+        "monthly_employer_regular": 576.23,
+        "monthly_employer_full_14": 672.27,
+        "hourly_cost": 7.64,
+        "cost_2024": 0.00,
+        "net_2024": 0.00,
+        "cost_2025": 0.00,
+        "net_2025": 0.00,
+        "cost_2026_jan_aug": 0.00,
+        "net_2026_jan_aug": 0.00,
+        "cost_2026_sep": 157.16,
+        "net_2026_sep": 118.24,
+        "notes": "Μερική απασχόληση (~21h/εβδ., πρόσληψη τέλη Σεπτ. 2026). Σεπτ. 6 ημ.: 157,16€ κόστος / 118,24€ καθαρά."
+    },
+    {
+        "staff_name": "Νάνσυ",
+        "payroll_code": "MCN001 - ΑΝΑΣΤΑΣΙΑ ΧΡΗΣΤΟΣ",
+        "role_type": "Τεχνίτρια",
+        "is_active": False,
+        "weekly_hours_declared": 40.0,
+        "nominal_gross": 1104.00,
+        "monthly_net_pocket": 982.00,
+        "monthly_efka_tax": 362.00,
+        "monthly_employer_regular": 1344.00,
+        "monthly_employer_full_14": 1568.00,
+        "hourly_cost": 8.78,
+        "cost_2024": 8634.33,
+        "net_2024": 6260.73,
+        "cost_2025": 16311.01,
+        "net_2025": 11749.92,
+        "cost_2026_jan_aug": 11709.65,
+        "net_2026_jan_aug": 8281.18,
+        "cost_2026_sep": 1865.33,
+        "net_2026_sep": 1450.27,
+        "notes": "Αποχώρησε 12/09/2026 (Σεπτ. 2026: 592,08€ τακτικές + 796,27€ Δώρο Χριστ. + 476,98€ Αποζ. Αδείας = 1.865,33€)."
+    },
+    {
+        "staff_name": "Άννα",
+        "payroll_code": "MCN008 - ΑΝΝΑ ΣΤΑΥΡΟΣ",
+        "role_type": "Τεχνίτρια",
+        "is_active": False,
+        "weekly_hours_declared": 32.0,
+        "nominal_gross": 920.00,
+        "monthly_net_pocket": 830.00,
+        "monthly_efka_tax": 280.00,
+        "monthly_employer_regular": 1110.00,
+        "monthly_employer_full_14": 1295.00,
+        "hourly_cost": 7.98,
+        "cost_2024": 3484.43,
+        "net_2024": 2732.29,
+        "cost_2025": 10534.39,
+        "net_2025": 8110.26,
+        "cost_2026_jan_aug": 0.00,
+        "net_2026_jan_aug": 0.00,
+        "cost_2026_sep": 0.00,
+        "net_2026_sep": 0.00,
+        "notes": "Πρώην τεχνίτρια (εργάστηκε έως Νοέμβριο 2025)."
+    },
+    {
+        "staff_name": "Μιχριμπάν",
+        "payroll_code": "MCN004 - ΜΙΧΡΙΜΠΑΝ ΜΕΜΕΤ",
+        "role_type": "Τεχνίτρια",
+        "is_active": False,
+        "weekly_hours_declared": 30.0,
+        "nominal_gross": 885.00,
+        "monthly_net_pocket": 790.00,
+        "monthly_efka_tax": 265.00,
+        "monthly_employer_regular": 1055.00,
+        "monthly_employer_full_14": 1230.00,
+        "hourly_cost": 8.03,
+        "cost_2024": 6307.31,
+        "net_2024": 4964.98,
+        "cost_2025": 10036.82,
+        "net_2025": 7787.84,
+        "cost_2026_jan_aug": 0.00,
+        "net_2026_jan_aug": 0.00,
+        "cost_2026_sep": 0.00,
+        "net_2026_sep": 0.00,
+        "notes": "Πρώην τεχνίτρια (εργάστηκε έως Οκτώβριο 2025)."
+    },
+    {
+        "staff_name": "Θεοδώρα (Άδεια)",
+        "payroll_code": "MCN007 & MCN003 - ΘΕΟΔΩΡΑ (Αισθητικός Ποδιών)",
+        "role_type": "Άδεια / Υποστήριξη",
+        "is_active": True,
+        "weekly_hours_declared": 4.0,
+        "nominal_gross": 96.76,
+        "monthly_net_pocket": 76.51,
+        "monthly_efka_tax": 31.05,
+        "monthly_employer_regular": 107.56,
+        "monthly_employer_full_14": 125.49,
+        "hourly_cost": 0.00,
+        "cost_2024": 2558.15,
+        "net_2024": 1771.00,
+        "cost_2025": 1631.86,
+        "net_2025": 1160.76,
+        "cost_2026_jan_aug": 984.39,
+        "net_2026_jan_aug": 700.21,
+        "cost_2026_sep": 107.56,
+        "net_2026_sep": 76.51,
+        "notes": "Αισθητικός ποδιών (υπεύθυνη άδειας λειτουργίας, 4 ημέρες/μήνα). Σταθερό κόστος μισθοδοσίας."
+    },
+    {
+        "staff_name": "Olta (Καθαρίστρια)",
+        "payroll_code": "MCN006 - OLTA NDRICIM",
+        "role_type": "Άδεια / Υποστήριξη",
+        "is_active": False,
+        "weekly_hours_declared": 0.0,
+        "nominal_gross": 623.56,
+        "monthly_net_pocket": 0.00,
+        "monthly_efka_tax": 0.00,
+        "monthly_employer_regular": 0.00,
+        "monthly_employer_full_14": 0.00,
+        "hourly_cost": 0.00,
+        "cost_2024": 5571.07,
+        "net_2024": 3984.91,
+        "cost_2025": 1733.79,
+        "net_2025": 1233.25,
+        "cost_2026_jan_aug": 0.00,
+        "net_2026_jan_aug": 0.00,
+        "cost_2026_sep": 0.00,
+        "net_2026_sep": 0.00,
+        "notes": "Καθαρίστρια στη μισθοδοσία 2024 (5.571,07€) και αρχών 2025 (1.733,79€)."
+    },
+    {
+        "staff_name": "Λαμπρινή (Υποδοχή)",
+        "payroll_code": "MCN005 - ΛΑΜΠΡΙΝΗ ΚΩΝΣΤΑΝΤΙΝΟΣ",
+        "role_type": "Άδεια / Υποστήριξη",
+        "is_active": False,
+        "weekly_hours_declared": 0.0,
+        "nominal_gross": 830.00,
+        "monthly_net_pocket": 0.00,
+        "monthly_efka_tax": 0.00,
+        "monthly_employer_regular": 0.00,
+        "monthly_employer_full_14": 0.00,
+        "hourly_cost": 0.00,
+        "cost_2024": 6633.87,
+        "net_2024": 4925.67,
+        "cost_2025": 0.00,
+        "net_2025": 0.00,
+        "cost_2026_jan_aug": 0.00,
+        "net_2026_jan_aug": 0.00,
+        "cost_2026_sep": 0.00,
+        "net_2026_sep": 0.00,
+        "notes": "Υπάλληλος υποδοχής το 2024 (6.633,87€ συνολικό κόστος / 4.925,67€ καθαρά)."
+    },
+    {
+        "staff_name": "Μαρία (Πρακτική ΕΠΑΣ)",
+        "payroll_code": "MCN011 - ΜΑΡΙΑ ΙΩΑΝΝΗΣ",
+        "role_type": "Άδεια / Υποστήριξη",
+        "is_active": False,
+        "weekly_hours_declared": 0.0,
+        "nominal_gross": 0.00,
+        "monthly_net_pocket": 0.00,
+        "monthly_efka_tax": 0.00,
+        "monthly_employer_regular": 0.00,
+        "monthly_employer_full_14": 0.00,
+        "hourly_cost": 0.00,
+        "cost_2024": 0.00,
+        "net_2024": 0.00,
+        "cost_2025": 0.00,
+        "net_2025": 0.00,
+        "cost_2026_jan_aug": 1642.05,
+        "net_2026_jan_aug": 1404.91,
+        "cost_2026_sep": 0.00,
+        "net_2026_sep": 0.00,
+        "notes": "Πρακτική άσκηση ΕΠΑΣ (70 ημ. στο 1ο οκτάμηνο 2026: 1.642,05€ κόστος / 1.404,91€ καθαρά)."
+    },
+    {
+        "staff_name": "Νάντια",
+        "payroll_code": "ΙΔΙΟΚΤΗΤΡΙΑ (Εκτός Μισθοδοσίας ΙΚΑ)",
+        "role_type": "Τεχνίτρια",
+        "is_active": True,
+        "weekly_hours_declared": 14.0,
+        "nominal_gross": 0.00,
+        "monthly_net_pocket": 0.00,
+        "monthly_efka_tax": 0.00,
+        "monthly_employer_regular": 0.00,
+        "monthly_employer_full_14": 0.00,
+        "hourly_cost": 0.00,
+        "cost_2024": 0.00,
+        "net_2024": 0.00,
+        "cost_2025": 0.00,
+        "net_2025": 0.00,
+        "cost_2026_jan_aug": 0.00,
+        "net_2026_jan_aug": 0.00,
+        "cost_2026_sep": 0.00,
+        "net_2026_sep": 0.00,
+        "notes": "Ιδιοκτήτρια / Τεχνίτρια (εκτός μισθοδοσίας ΙΚΑ). Μπορείτε να ορίσετε τεκμαρτό ωρομίσθιο αν επιθυμείτε."
+    },
+    {
+        "staff_name": "Δημήτρης",
+        "payroll_code": "ΔΙΟΙΚΗΣΗ / ΥΠΟΔΟΧΗ (Εκτός ΙΚΑ)",
+        "role_type": "Ιδιοκτήτης / Διοίκηση",
+        "is_active": True,
+        "weekly_hours_declared": 64.5,
+        "nominal_gross": 0.00,
+        "monthly_net_pocket": 0.00,
+        "monthly_efka_tax": 0.00,
+        "monthly_employer_regular": 0.00,
+        "monthly_employer_full_14": 0.00,
+        "hourly_cost": 0.00,
+        "cost_2024": 0.00,
+        "net_2024": 0.00,
+        "cost_2025": 0.00,
+        "net_2025": 0.00,
+        "cost_2026_jan_aug": 0.00,
+        "net_2026_jan_aug": 0.00,
+        "cost_2026_sep": 0.00,
+        "net_2026_sep": 0.00,
+        "notes": "Διοίκηση / Υποδοχή καταστήματος (εκτός μισθοδοσίας ΙΚΑ)."
+    }
+]
+
+def get_payroll_profiles_df() -> pd.DataFrame:
+    """Φορτώνει το πλήρες μητρώο μισθοδοσίας από το __PAYROLL_PROFILES__ (ή συγχωνεύει με το DEFAULT_PAYROLL_LEDGER)."""
+    saved_list = load_app_config_json("__PAYROLL_PROFILES__")
+    default_map = {r["staff_name"]: dict(r) for r in DEFAULT_PAYROLL_LEDGER}
+    if isinstance(saved_list, list) and len(saved_list) > 0:
+        merged_rows = []
+        seen_names = set()
+        for item in saved_list:
+            if not isinstance(item, dict) or not item.get("staff_name"):
+                continue
+            s_name = str(item["staff_name"]).strip()
+            seen_names.add(s_name)
+            base_row = dict(default_map.get(s_name, DEFAULT_PAYROLL_LEDGER[0]))
+            base_row.update(item)
+            merged_rows.append(base_row)
+        for def_r in DEFAULT_PAYROLL_LEDGER:
+            if def_r["staff_name"] not in seen_names:
+                merged_rows.append(dict(def_r))
+        return pd.DataFrame(merged_rows)
+    return pd.DataFrame([dict(r) for r in DEFAULT_PAYROLL_LEDGER])
+
+def save_payroll_profiles_df(df_ed: pd.DataFrame, auto_recalc_rates: bool = True):
+    """Αποθηκεύει το μητρώο μισθοδοσίας στο Supabase (__PAYROLL_PROFILES__) και ενημερώνει αυτόματα το config_staff."""
+    records = []
+    staff_table_rows = []
+    for _, r in df_ed.iterrows():
+        s_name = str(r.get("staff_name", "")).strip()
+        if not s_name:
+            continue
+        role_t = str(r.get("role_type", "Τεχνίτρια")).strip()
+        wk_h = float(r.get("weekly_hours_declared", 0.0) or 0.0)
+        net_p = round(float(r.get("monthly_net_pocket", 0.0) or 0.0), 2)
+        efka_t = round(float(r.get("monthly_efka_tax", 0.0) or 0.0), 2)
+        reg_emp = round(float(r.get("monthly_employer_regular", 0.0) or 0.0), 2)
+        full_14 = round(float(r.get("monthly_employer_full_14", 0.0) or 0.0), 2)
+        h_cost = round(float(r.get("hourly_cost", 0.0) or 0.0), 2)
+
+        if auto_recalc_rates and role_t == "Τεχνίτρια":
+            if net_p > 0 or efka_t > 0:
+                reg_emp = round(net_p + efka_t, 2)
+            if reg_emp > 0:
+                full_14 = round(reg_emp * (14.0 / 12.0), 2)
+                monthly_hours = wk_h * (52.0 / 12.0) if wk_h > 0 else 166.67
+                h_cost = round(full_14 / monthly_hours, 2)
+        elif auto_recalc_rates and role_t == "Άδεια / Υποστήριξη":
+            if net_p > 0 or efka_t > 0:
+                reg_emp = round(net_p + efka_t, 2)
+            if reg_emp > 0:
+                full_14 = round(reg_emp * (14.0 / 12.0), 2)
+
+        rec = {
+            "staff_name": s_name,
+            "payroll_code": str(r.get("payroll_code", "") or ""),
+            "role_type": role_t,
+            "is_active": bool(r.get("is_active", True)),
+            "weekly_hours_declared": wk_h,
+            "nominal_gross": round(float(r.get("nominal_gross", 0.0) or 0.0), 2),
+            "monthly_net_pocket": net_p,
+            "monthly_efka_tax": efka_t,
+            "monthly_employer_regular": reg_emp,
+            "monthly_employer_full_14": full_14,
+            "hourly_cost": h_cost,
+            "cost_2024": round(float(r.get("cost_2024", 0.0) or 0.0), 2),
+            "net_2024": round(float(r.get("net_2024", 0.0) or 0.0), 2),
+            "cost_2025": round(float(r.get("cost_2025", 0.0) or 0.0), 2),
+            "net_2025": round(float(r.get("net_2025", 0.0) or 0.0), 2),
+            "cost_2026_jan_aug": round(float(r.get("cost_2026_jan_aug", 0.0) or 0.0), 2),
+            "net_2026_jan_aug": round(float(r.get("net_2026_jan_aug", 0.0) or 0.0), 2),
+            "cost_2026_sep": round(float(r.get("cost_2026_sep", 0.0) or 0.0), 2),
+            "net_2026_sep": round(float(r.get("net_2026_sep", 0.0) or 0.0), 2),
+            "notes": str(r.get("notes", "") or "")
+        }
+        records.append(rec)
+        if role_t in ("Τεχνίτρια", "Ιδιοκτήτης / Διοίκηση"):
+            staff_table_rows.append({
+                "staff_name": s_name,
+                "hourly_cost": h_cost if role_t == "Τεχνίτρια" else 0.0,
+                "weekly_hours_declared": wk_h
+            })
+
+    save_app_config_json("__PAYROLL_PROFILES__", records)
+    if staff_table_rows:
+        try:
+            supabase.table("config_staff").upsert(staff_table_rows).execute()
+        except Exception:
+            pass
+    return records
+
+
 def generate_dynamic_shift_insights(sched_cap_matrix, demand_matrix, staff_per_hour_grid, avg_hourly_rate=7.5):
     excess_matrix = sched_cap_matrix - demand_matrix
     overstaffed_blocks = []
@@ -774,8 +1153,30 @@ with st.sidebar:
             help="Επειδή έχετε ανεβάσει ολόκληρο το ιστορικό 2,5 ετών (17.938 ραντεβού), το σύστημα γνωρίζει ήδη ποιες πελάτισσες έχουν ξανάρθει! Αφήστε το στο 100%."
         )
 
+    df_payroll_profiles = get_payroll_profiles_df()
+
     with st.container(border=True):
-        st.markdown("**Κανόνες Βαρδιών**")
+        st.markdown("**Μισθοδοσία & Κανόνες Βαρδιών**")
+        payroll_calc_mode = st.radio(
+            "Μέθοδος Υπολογισμού Μισθοδοσίας στο P&L",
+            options=[
+                "🏛️ Πραγματική Λογιστική Μισθοδοσία (Εκκαθαριστικά ΕΦΚΑ/ΦΜΥ/Δώρα)",
+                "⏱️ Ωρομίσθιο Βάρδιας (Ώρες Βάρδιας × Ωριαίο Κόστος)"
+            ],
+            index=0,
+            help="Η 'Πραγματική Λογιστική Μισθοδοσία' χρησιμοποιεί τα ακριβή ποσά από τις μισθοδοτικές καταστάσεις του λογιστή (2024, 2025, 2026) και τα τρέχοντα μηνιαία κόστη εργοδότη."
+        )
+        use_accounting_payroll = payroll_calc_mode.startswith("🏛️")
+        include_payroll_gifts = st.checkbox(
+            "Συμπερίληψη Δώρων, Επιδομάτων (14 μισθοί) & Εκκαθαρίσεων",
+            value=True,
+            help="Όταν είναι ενεργό, περιλαμβάνει Δώρο Χριστουγέννων, Δώρο Πάσχα, Επίδομα Αδείας και την εκκαθάριση αποχώρησης Σεπτ. 2026 (Νάνσυ)."
+        )
+        include_support_staff = st.checkbox(
+            "Συμπερίληψη Προσωπικού Άδειας / Καθαριότητας / Υποδοχής / ΕΠΑΣ",
+            value=True,
+            help="Συμπεριλαμβάνει στη συνολική μισθοδοσία την Αισθητικό Ποδιών (Θεοδώρα - Άδεια Λειτουργίας), Καθαρίστρια (Olta), Υποδοχή (Λαμπρινή) και Πρακτική ΕΠΑΣ (Μαρία)."
+        )
         use_rolling_schedule = st.checkbox(
             "Κληρονόμηση προηγούμενου προγράμματος (Rolling Schedule)",
             value=True,
@@ -784,7 +1185,7 @@ with st.sidebar:
         auto_skip_zero_weeks = st.checkbox(
             "Εξαίρεση εβδομάδων με 0 ραντεβού ανά τεχνίτρια (Άδεια / Πριν την πρόσληψη)",
             value=True,
-            help="Αν μια τεχνίτρια έχει 0 ραντεβού σε ολόκληρη την εβδομάδα (π.χ. πριν προσληφθεί ή σε ετήσια άδεια), δεν χρεώνεται μισθοδοσία γι' αυτή την εβδομάδα."
+            help="Αν μια τεχνίτρια έχει 0 ραντεβού σε ολόκληρη την εβδομάδα (π.χ. πριν προσληφθεί ή σε ετήσια άδεια), δεν χρεώνεται βάρδια γι' αυτή την εβδομάδα."
         )
 
     with st.container(border=True):
@@ -871,11 +1272,14 @@ with st.sidebar:
 # --- 7. ΚΑΤΑΛΟΓΟΣ & ΕΠΕΞΕΡΓΑΣΙΑ ΠΟΛΛΑΠΛΩΝ CSV ---
 def seed_initial_catalog():
     staff_data = [
-        {"staff_name": "Νάντια", "hourly_cost": 7.50, "weekly_hours_declared": 14},
-        {"staff_name": "Κατερίνα", "hourly_cost": 7.50, "weekly_hours_declared": 30},
-        {"staff_name": "Κατερίνα Π.", "hourly_cost": 7.50, "weekly_hours_declared": 40},
-        {"staff_name": "Δόμνα", "hourly_cost": 7.50, "weekly_hours_declared": 39},
-        {"staff_name": "Αντιγόνη", "hourly_cost": 7.50, "weekly_hours_declared": 20},
+        {"staff_name": "Κατερίνα Π.", "hourly_cost": 8.63, "weekly_hours_declared": 40.0},
+        {"staff_name": "Κατερίνα", "hourly_cost": 7.84, "weekly_hours_declared": 40.0},
+        {"staff_name": "Δόμνα", "hourly_cost": 7.42, "weekly_hours_declared": 40.0},
+        {"staff_name": "Αντιγόνη", "hourly_cost": 7.64, "weekly_hours_declared": 21.0},
+        {"staff_name": "Νάνσυ", "hourly_cost": 8.78, "weekly_hours_declared": 40.0},
+        {"staff_name": "Άννα", "hourly_cost": 7.98, "weekly_hours_declared": 32.0},
+        {"staff_name": "Μιχριμπάν", "hourly_cost": 8.03, "weekly_hours_declared": 30.0},
+        {"staff_name": "Νάντια", "hourly_cost": 0.00, "weekly_hours_declared": 14.0},
         {"staff_name": "Δημήτρης", "hourly_cost": 0.00, "weekly_hours_declared": 64.5}
     ]
     services_data = [
@@ -913,6 +1317,8 @@ def seed_initial_catalog():
     ]
     supabase.table("config_staff").upsert(staff_data).execute()
     supabase.table("config_services").upsert(services_data).execute()
+    save_app_config_json("__PAYROLL_PROFILES__", DEFAULT_PAYROLL_LEDGER)
+
 
 def process_and_calculate_bookings(df_raw, df_services, df_staff, df_existing_bookings):
     srv_map = {re.sub(r'\s+', ' ', str(row['service_name'])).strip().lower(): row.to_dict() for _, row in df_services.iterrows()}
@@ -1289,7 +1695,7 @@ with st.container(border=True):
                 start_d, end_d = full_cycle_start_d, full_cycle_end_d
                 period_label = f"Όλες οι Πλήρεις Εβδομάδες ({start_d.strftime('%d/%m/%Y')} – {end_d.strftime('%d/%m/%Y')})"
 
-# --- 9. ΚΕΝΤΡΙΚΗ ΜΗΧΑΝΗ ΥΠΟΛΟΓΙΣΜΟΥ P&L, ΒΑΡΔΙΩΝ & ABC ΚΟΣΤΟΛΟΓΗΣΗΣ ---
+# --- 9. ΚΕΝΤΡΙΚΗ ΜΗΧΑΝΗ ΥΠΟΛΟΓΙΣΜΟΥ P&L, ΜΙΣΘΟΔΟΣΙΑΣ, ΒΑΡΔΙΩΝ & ABC ΚΟΣΤΟΛΟΓΗΣΗΣ ---
 if not df_bookings_db.empty:
     active_comp_all = df_bookings_db[df_bookings_db['status_group'] == 'COMPLETED']
     active_staff_weeks_set = set(
@@ -1300,6 +1706,155 @@ if not df_bookings_db.empty:
         d_min_w = grp['appointment_date_dt'].dt.date.min()
         d_max_w = grp['appointment_date_dt'].dt.date.max()
         week_active_date_bounds[m_str] = (d_min_w, d_max_w, len(grp))
+
+    # Ενοποιημένο Μητρώο Προσωπικού (Συνδυασμός df_payroll_profiles + df_staff_db)
+    payroll_prof_map = {str(r["staff_name"]).strip().lower(): r.to_dict() for _, r in df_payroll_profiles.iterrows()}
+    roster_rows = []
+    seen_roster = set()
+    for _, r in df_payroll_profiles.iterrows():
+        s_n = str(r["staff_name"]).strip()
+        if r["role_type"] in ("Τεχνίτρια", "Ιδιοκτήτης / Διοίκηση"):
+            seen_roster.add(s_n.lower())
+            base_hc = float(r.get("hourly_cost", 0.0) or 0.0)
+            eff_hc = base_hc if include_payroll_gifts else round(base_hc * (12.0 / 14.0), 2)
+            roster_rows.append({
+                "staff_name": s_n,
+                "hourly_cost": eff_hc if r["role_type"] == "Τεχνίτρια" else 0.0,
+                "weekly_hours_declared": float(r.get("weekly_hours_declared", 0.0) or 0.0),
+                "role_type": r["role_type"]
+            })
+    for _, r in df_staff_db.iterrows():
+        s_n = str(r["staff_name"]).strip()
+        if s_n.lower() not in seen_roster:
+            seen_roster.add(s_n.lower())
+            roster_rows.append({
+                "staff_name": s_n,
+                "hourly_cost": float(r.get("hourly_cost", 7.5) or 0.0),
+                "weekly_hours_declared": float(r.get("weekly_hours_declared", 30.0) or 0.0),
+                "role_type": "Τεχνίτρια" if float(r.get("hourly_cost", 7.5) or 0.0) > 0 else "Ιδιοκτήτης / Διοίκηση"
+            })
+    df_all_staff_roster = pd.DataFrame(roster_rows)
+    staff_hourly_lookup = {str(r["staff_name"]).strip().lower(): float(r["hourly_cost"]) for _, r in df_all_staff_roster.iterrows()}
+
+    # Προ-υπολογισμός ενεργών ημερών ραντεβού ανά τεχνίτρια και λογιστική περίοδο (για ακριβή επιμερισμό σε μήνες/εβδομάδες)
+    ACCOUNTING_EPOCHS = [
+        ("2024", date(2024, 7, 1), date(2024, 12, 31)),
+        ("2025", date(2025, 1, 1), date(2025, 12, 31)),
+        ("2026_jan_aug", date(2026, 1, 1), date(2026, 8, 31)),
+        ("2026_sep", date(2026, 9, 1), date(2026, 9, 30)),
+    ]
+    tech_epoch_appt_dates = {}
+    for s_low_k, grp_s in active_comp_all.groupby(active_comp_all['staff_name'].str.strip().str.lower()):
+        s_dates = sorted(grp_s['appointment_date_dt'].dt.date.unique())
+        for ep_key, ep_s, ep_e in ACCOUNTING_EPOCHS:
+            ep_d_list = [d for d in s_dates if ep_s <= d <= ep_e]
+            tech_epoch_appt_dates[(s_low_k, ep_key)] = ep_d_list
+
+    def compute_accounting_payroll_for_period(p_start_d: date, p_end_d: date):
+        """
+        Υπολογίζει για οποιοδήποτε εύρος ημερομηνιών [p_start_d, p_end_d]:
+        - Το ακριβές εργοδοτικό κόστος & καθαρές αποδοχές τσέπης ανά εργαζόμενο βάσει των εκκαθαριστικών μισθοδοσίας (2024, 2025, Ιαν-Αυγ 2026, Σεπτ 2026)
+        - Και για περιόδους από 01/10/2026 και μετά, βάσει των τρεχόντων μηνιαίων μισθών του πίνακα.
+        """
+        emp_cost = {}
+        emp_net = {}
+        support_details = []
+        support_cost_sum = 0.0
+        support_net_sum = 0.0
+
+        for _, prof in df_payroll_profiles.iterrows():
+            s_name = str(prof["staff_name"]).strip()
+            s_low = s_name.lower()
+            role_t = str(prof.get("role_type", "Τεχνίτρια")).strip()
+            c_tot = 0.0
+            n_tot = 0.0
+
+            for ep_key, ep_s, ep_e in ACCOUNTING_EPOCHS:
+                ov_s = max(p_start_d, ep_s)
+                ov_e = min(p_end_d, ep_e)
+                if ov_s > ov_e:
+                    continue
+                base_c = float(prof.get(f"cost_{ep_key}", 0.0) or 0.0)
+                base_n = float(prof.get(f"net_{ep_key}", 0.0) or 0.0)
+                if base_c <= 0 and base_n <= 0:
+                    continue
+
+                if not include_payroll_gifts:
+                    if ep_key == "2026_sep" and s_low == "νάνσυ":
+                        # Αφαίρεση εκκαθάρισης αποχώρησης (Δώρο Χριστουγέννων 796,27€ + Αποζ. Αδείας 476,98€) αν ο χρήστης θέλει μόνο τακτική μισθοδοσία
+                        base_c = min(base_c, 592.08)
+                        base_n = min(base_n, 416.14)
+                    elif ep_key in ("2024", "2025", "2026_jan_aug"):
+                        base_c = base_c * (12.0 / 14.0)
+                        base_n = base_n * (12.0 / 14.0)
+
+                # Έλεγχος αν καλύπτεται ολόκληρη η λογιστική περίοδος
+                if ov_s <= (ep_s + timedelta(days=5)) and ov_e >= (ep_e - timedelta(days=5)):
+                    ratio = 1.0
+                else:
+                    if role_t == "Τεχνίτρια":
+                        d_list = tech_epoch_appt_dates.get((s_low, ep_key), [])
+                        if len(d_list) > 0:
+                            ov_cnt = sum(1 for d in d_list if ov_s <= d <= ov_e)
+                            ratio = ov_cnt / float(len(d_list))
+                        else:
+                            ratio = 0.0
+                    else:
+                        ep_days = float((ep_e - ep_s).days + 1)
+                        ov_days = float((ov_e - ov_s).days + 1)
+                        ratio = ov_days / ep_days
+
+                c_tot += base_c * ratio
+                n_tot += base_n * ratio
+
+            # Περίοδος από 01/10/2026 και μετά (Τρέχον Μηνιαίο Μισθολόγιο)
+            if p_end_d >= date(2026, 10, 1) and bool(prof.get("is_active", True)):
+                oct_s = max(p_start_d, date(2026, 10, 1))
+                oct_e = p_end_d
+                if oct_s <= oct_e:
+                    oct_workdays = 0
+                    cd_tmp = oct_s
+                    while cd_tmp <= oct_e:
+                        wd_t = cd_tmp.weekday()
+                        if wd_t <= 5:
+                            m_s_t = (cd_tmp - timedelta(days=wd_t)).strftime("%Y-%m-%d")
+                            valid_day = True
+                            if auto_skip_zero_weeks and m_s_t not in week_active_date_bounds:
+                                valid_day = False
+                            elif m_s_t in week_active_date_bounds:
+                                w_min_t, w_max_t, w_cnt_t = week_active_date_bounds[m_s_t]
+                                if w_cnt_t < 25 and (cd_tmp < w_min_t or cd_tmp > w_max_t):
+                                    valid_day = False
+                            if valid_day:
+                                if role_t == "Τεχνίτρια" and auto_skip_zero_weeks:
+                                    if (s_low, m_s_t) in active_staff_weeks_set:
+                                        oct_workdays += 1
+                                else:
+                                    oct_workdays += 1
+                        cd_tmp += timedelta(days=1)
+
+                    mo_frac = (oct_workdays * (7.0 / 6.0)) / 30.4375
+                    mo_c = float(prof.get("monthly_employer_full_14", 0.0) if include_payroll_gifts else prof.get("monthly_employer_regular", 0.0))
+                    mo_n = float(prof.get("monthly_net_pocket", 0.0)) * ((14.0 / 12.0) if include_payroll_gifts else 1.0)
+                    c_tot += mo_c * mo_frac
+                    n_tot += mo_n * mo_frac
+
+            c_tot = round(c_tot, 2)
+            n_tot = round(n_tot, 2)
+            emp_cost[s_name] = c_tot
+            emp_net[s_name] = n_tot
+            if role_t == "Άδεια / Υποστήριξη" and (c_tot > 0 or n_tot > 0):
+                support_cost_sum += c_tot
+                support_net_sum += n_tot
+                support_details.append({
+                    "Εργαζόμενος": s_name,
+                    "Κωδικός / Ιδιότητα": str(prof.get("payroll_code", "")),
+                    "Καθαρά στην Τσέπη (€)": n_tot,
+                    "ΕΦΚΑ & ΦΜΥ (€)": round(max(0.0, c_tot - n_tot), 2),
+                    "Συνολικό Κόστος Εργοδότη (€)": c_tot
+                })
+
+        return emp_cost, emp_net, round(support_cost_sum, 2), round(support_net_sum, 2), support_details
 
     mask = (df_bookings_db['appointment_date_dt'].dt.date >= start_d) & (df_bookings_db['appointment_date_dt'].dt.date <= end_d)
     df_filtered = df_bookings_db[mask].copy()
@@ -1319,6 +1874,10 @@ if not df_bookings_db.empty:
         wid_mask = comp_mask & (df_filtered['channel'] == 'Widget (Social)')
         df_filtered.loc[wid_mask, 'commission_fee'] = (df_filtered.loc[wid_mask, 'gross_price'] * (tw_widget_comm_pct / 100.0)).round(2)
 
+        # Δυναμικός υπολογισμός labor_cost ανά ραντεβού με το πραγματικό ωριαίο κόστος κάθε τεχνίτριας
+        comp_staff_rates = df_filtered.loc[comp_mask, 'staff_name'].astype(str).str.strip().str.lower().map(lambda x: staff_hourly_lookup.get(x, 7.80))
+        df_filtered.loc[comp_mask, 'labor_cost'] = ((df_filtered.loc[comp_mask, 'duration_minutes'] / 60.0) * comp_staff_rates).round(2)
+
         df_filtered.loc[comp_mask, 'net_profit'] = (
             df_filtered.loc[comp_mask, 'net_revenue']
             - df_filtered.loc[comp_mask, 'commission_fee']
@@ -1335,13 +1894,12 @@ if not df_bookings_db.empty:
     net_rev = float(df_comp['net_revenue'].sum()) if not df_comp.empty else 0.0
     comm_total = float(df_comp['commission_fee'].sum()) if not df_comp.empty else 0.0
     mat_total = float(df_comp['material_cost'].sum()) if not df_comp.empty else 0.0
-    labor_prod_total = float(df_comp['labor_cost'].sum()) if not df_comp.empty else 0.0
 
     # --- ΗΜΕΡΑ-ΠΡΟΣ-ΗΜΕΡΑ & ΩΡΑ-ΠΡΟΣ-ΩΡΑ ΜΗΧΑΝΗ ΒΑΡΔΙΩΝ ---
     staff_scheduled_hours_map = {}
     staff_active_weeks_count = {}
     staff_cost_map = {}
-    for _, s_row in df_staff_db.iterrows():
+    for _, s_row in df_all_staff_roster.iterrows():
         s_key = str(s_row['staff_name']).strip()
         staff_scheduled_hours_map[s_key] = 0.0
         staff_active_weeks_count[s_key] = set()
@@ -1380,12 +1938,13 @@ if not df_bookings_db.empty:
                 period_exact_weeks_seen.add(mon_str)
             wk_map = {str(r.get("staff_name", "")).strip().lower(): r for r in wk_rows}
 
-            for _, s_row in df_staff_db.iterrows():
+            for _, s_row in df_all_staff_roster.iterrows():
                 s_name = str(s_row['staff_name']).strip()
                 s_low = s_name.lower()
                 h_cost = float(s_row.get('hourly_cost', 7.5))
+                role_t = str(s_row.get('role_type', 'Τεχνίτρια'))
 
-                if auto_skip_zero_weeks and h_cost > 0:
+                if auto_skip_zero_weeks and role_t == "Τεχνίτρια":
                     if (s_low, mon_str) not in active_staff_weeks_set:
                         continue
 
@@ -1402,7 +1961,7 @@ if not df_bookings_db.empty:
                     staff_active_weeks_count[s_name].add(mon_str)
                     daily_payroll_by_monday[mon_str] = daily_payroll_by_monday.get(mon_str, 0.0) + (day_h * h_cost)
 
-                if h_cost > 0:
+                if role_t == "Τεχνίτρια" and s_low != "νάντια":
                     for st_h, en_h in iv_list:
                         for h_idx, h in enumerate(range(9, 21)):
                             ov = max(0.0, min(h + 1.0, en_h) - max(float(h), st_h))
@@ -1412,38 +1971,61 @@ if not df_bookings_db.empty:
                                 period_staff_per_hour_grid[wd][h_idx].add(s_name)
         curr_d += timedelta(days=1)
 
+    emp_acct_cost_map, emp_acct_net_map, support_payroll_raw, support_net_raw, support_staff_details = compute_accounting_payroll_for_period(start_d, end_d)
+
     staff_perf_list = []
     total_tech_prod_h = 0.0
     total_tech_idle_h = 0.0
     total_tech_decl_h = 0.0
+    tech_net_pocket_sum = 0.0
 
-    for _, s_row in df_staff_db.iterrows():
+    for _, s_row in df_all_staff_roster.iterrows():
         s_name = str(s_row['staff_name']).strip()
         h_cost = float(s_row.get('hourly_cost', 7.5))
+        role_t = str(s_row.get('role_type', 'Τεχνίτρια'))
         raw_decl_hours = round(staff_scheduled_hours_map.get(s_name, 0.0), 1)
 
         s_df = df_comp[df_comp['staff_name'].str.lower() == s_name.lower()] if not df_comp.empty else pd.DataFrame()
         prod_hours = (s_df['duration_minutes'].sum() / 60.0) if not s_df.empty else 0.0
         s_prod_labor = float(s_df['labor_cost'].sum()) if not s_df.empty else 0.0
+        acct_c = float(emp_acct_cost_map.get(s_name, 0.0))
+        acct_n = float(emp_acct_net_map.get(s_name, 0.0))
 
-        # Παραλείπουμε πρώην τεχνίτριες που δεν είχαν ούτε βάρδια ούτε ραντεβού στην επιλεγμένη περίοδο
-        if h_cost > 0 and raw_decl_hours <= 0 and len(s_df) == 0:
+        # Παραλείπουμε πρώην τεχνίτριες που δεν είχαν ούτε βάρδια, ούτε ραντεβού, ούτε μισθοδοσία στην επιλεγμένη περίοδο
+        if role_t == "Τεχνίτρια" and raw_decl_hours <= 0 and len(s_df) == 0 and acct_c <= 0:
             continue
 
-        if h_cost > 0:
+        if role_t == "Τεχνίτρια":
             decl_hours = max(raw_decl_hours, round(prod_hours, 1))
             idle_hours = max(0.0, decl_hours - prod_hours)
-            idle_cost_s = round(idle_hours * h_cost, 2)
-            decl_cost = round(s_prod_labor + idle_cost_s, 2)
             util_pct = (prod_hours / decl_hours * 100.0) if decl_hours > 0 else 0.0
-            total_tech_prod_h += prod_hours
-            total_tech_idle_h += idle_hours
-            total_tech_decl_h += decl_hours
+
+            if use_accounting_payroll and (acct_c > 0 or h_cost == 0):
+                decl_cost = round(acct_c, 2)
+                s_net_pocket = round(acct_n, 2)
+                if decl_hours > 0:
+                    s_prod_labor = round(decl_cost * (prod_hours / decl_hours), 2)
+                    idle_cost_s = round(max(0.0, decl_cost - s_prod_labor), 2)
+                else:
+                    s_prod_labor = 0.0
+                    idle_cost_s = decl_cost
+            else:
+                idle_cost_s = round(idle_hours * h_cost, 2)
+                decl_cost = round(s_prod_labor + idle_cost_s, 2)
+                s_net_pocket = round(decl_cost * 0.745, 2)
+
+            if h_cost > 0 or acct_c > 0:
+                total_tech_prod_h += prod_hours
+                total_tech_idle_h += idle_hours
+                total_tech_decl_h += decl_hours
+            tech_net_pocket_sum += s_net_pocket
         else:
             decl_hours = raw_decl_hours
             idle_hours = 0.0
             idle_cost_s = 0.0
             decl_cost = 0.0
+            s_prod_labor = 0.0
+            s_net_pocket = 0.0
             util_pct = 0.0
 
         s_gross = float(s_df['gross_price'].sum()) if not s_df.empty else 0.0
@@ -1452,15 +2034,19 @@ if not df_bookings_db.empty:
         s_mat = float(s_df['material_cost'].sum()) if not s_df.empty else 0.0
         s_true_net_contrib = s_net_rev - s_comm - s_mat - decl_cost
         short_appts = len(s_df[s_df['duration_minutes'] <= 15]) if not s_df.empty else 0
+        s_efka_tax = round(max(0.0, decl_cost - s_net_pocket), 2)
 
         staff_perf_list.append({
             "Τεχνίτρια": s_name,
-            "Ρόλος": "Τεχνίτρια" if h_cost > 0 else "Διοίκηση/Υποδοχή",
+            "Ρόλος": "Τεχνίτρια" if role_t == "Τεχνίτρια" else "Διοίκηση/Υποδοχή",
             "Ενεργές Εβδ.": len(staff_active_weeks_count.get(s_name, set())),
             "Ώρες Βάρδιας": round(decl_hours, 1),
             "Παραγωγικές Ώρες": round(prod_hours, 1),
             "Νεκρές Ώρες (Idle)": round(idle_hours, 1),
             "Πληρότητα (%)": round(util_pct, 1),
+            "Καθαρά στην Τσέπη (€)": round(s_net_pocket, 2),
+            "ΕΦΚΑ & ΦΜΥ (€)": s_efka_tax,
+            "Εργασία Ραντεβού (€)": round(s_prod_labor, 2),
             "Μισθοδοσία (€)": round(decl_cost, 2),
             "Κόστος Νεκρού Χρόνου (€)": round(idle_cost_s, 2),
             "Μικτός Τζίρος (€)": round(s_gross, 2),
@@ -1477,8 +2063,16 @@ if not df_bookings_db.empty:
 
     overall_occ_pct = (total_tech_prod_h / total_tech_decl_h * 100.0) if total_tech_decl_h > 0 else 0.0
     net_rev = round(gross_rev - vat_total, 2)
-    idle_labor_cost = round(float(df_tech_perf["Κόστος Νεκρού Χρόνου (€)"].sum()), 2) if not df_tech_perf.empty else 0.0
+    labor_prod_total = round(float(df_tech_perf["Εργασία Ραντεβού (€)"].sum()), 2) if not df_tech_perf.empty else 0.0
+    tech_idle_only_cost = round(float(df_tech_perf["Κόστος Νεκρού Χρόνου (€)"].sum()), 2) if not df_tech_perf.empty else 0.0
+    support_payroll_cost = round(support_payroll_raw, 2) if (use_accounting_payroll and include_support_staff) else 0.0
+    support_net_pocket = round(support_net_raw, 2) if (use_accounting_payroll and include_support_staff) else 0.0
+
+    # Το idle_labor_cost περιλαμβάνει τον μη-παραγωγικό μισθολογικό χρόνο (νεκρός χρόνος βαρδιών + προσωπικό υποστήριξης/άδειας)
+    idle_labor_cost = round(tech_idle_only_cost + support_payroll_cost, 2)
     total_declared_payroll = round(labor_prod_total + idle_labor_cost, 2)
+    total_net_pocket_payroll = round(tech_net_pocket_sum + support_net_pocket, 2)
+    total_efka_tax_payroll = round(max(0.0, total_declared_payroll - total_net_pocket_payroll), 2)
 
     monthly_fixed = float(df_expenses_db['amount'].sum()) if not df_expenses_db.empty else 1050.0
     effective_calendar_days = max(1.0, active_workdays_count * (7.0 / 6.0))
@@ -1529,9 +2123,9 @@ if not df_bookings_db.empty:
         )
     else:
         st.caption(
-            f"📍 **Ενεργή Περίοδος:** `{period_label}` • **{completed_count:,} ολοκληρωμένα ραντεβού** • "
+            f"📍 **Ενεργή Περίοδος:** `{period_label}` • **{completed_count:,} ραντεβού** • "
             f"Έσοδο Παραγ. Ώρας: **{gross_per_prod_h:.2f} €/h** (**{net_per_prod_h:.2f} €/h** προ ΦΠΑ) • "
-            f"Βάρδιες Τεχνιτριών: **{total_tech_decl_h:,.1f}h** (Σε ραντεβού: **{total_tech_prod_h:,.1f}h** | Νεκρός Χρόνος: **{total_tech_idle_h:,.1f}h** | Πληρότητα: **{overall_occ_pct:.1f}%**)"
+            f"Συνολική Μισθοδοσία Εργοδότη: **{total_declared_payroll:,.2f} €** (Καθαρά Τσέπης: **{total_net_pocket_payroll:,.2f} €** | ΕΦΚΑ+ΦΜΥ: **{total_efka_tax_payroll:,.2f} €**)"
         )
 
 # --- 9Β. ΒΟΗΘΗΤΙΚΗ ΣΥΝΑΡΤΗΣΗ ΥΠΟΛΟΓΙΣΜΟΥ P&L ΟΠΟΙΑΣΔΗΠΟΤΕ ΠΕΡΙΟΔΟΥ (ΓΙΑ ΣΥΓΚΡΙΣΗ ΜΗΝΩΝ / ΕΤΩΝ) ---
@@ -1549,6 +2143,9 @@ def compute_period_pnl_summary(p_start_d: date, p_end_d: date, p_label: str):
     p_comp.loc[p_comp['channel'] == 'Treatwell (Επαναλ.)', 'commission_fee'] = (p_comp.loc[p_comp['channel'] == 'Treatwell (Επαναλ.)', 'gross_price'] * (tw_ret_comm_pct / 100.0)).round(2)
     p_comp.loc[p_comp['channel'] == 'Widget (Social)', 'commission_fee'] = (p_comp.loc[p_comp['channel'] == 'Widget (Social)', 'gross_price'] * (tw_widget_comm_pct / 100.0)).round(2)
 
+    p_staff_rates = p_comp['staff_name'].astype(str).str.strip().str.lower().map(lambda x: staff_hourly_lookup.get(x, 7.80))
+    p_comp['labor_cost'] = ((p_comp['duration_minutes'] / 60.0) * p_staff_rates).round(2)
+
     p_gross = round(float(p_comp['gross_price'].sum()), 2)
     p_vat = round(float(p_comp['vat_amount'].sum()), 2)
     p_net = round(p_gross - p_vat, 2)
@@ -1557,7 +2154,7 @@ def compute_period_pnl_summary(p_start_d: date, p_end_d: date, p_label: str):
     p_prod_lab = round(float(p_comp['labor_cost'].sum()), 2)
     p_prod_h = float(p_comp['duration_minutes'].sum()) / 60.0
 
-    p_sched_map = {str(r['staff_name']).strip(): 0.0 for _, r in df_staff_db.iterrows()}
+    p_sched_map = {str(r['staff_name']).strip(): 0.0 for _, r in df_all_staff_roster.iterrows()}
     p_workdays = 0
     c_d = p_start_d
     while c_d <= p_end_d:
@@ -1576,11 +2173,11 @@ def compute_period_pnl_summary(p_start_d: date, p_end_d: date, p_label: str):
             d_col = DAYS_GR[wd]
             wk_r, _, _ = resolve_week_schedule_smart(m_s, db_schedules, use_rolling_schedule)
             wk_m = {str(r.get("staff_name", "")).strip().lower(): r for r in wk_r}
-            for _, s_row in df_staff_db.iterrows():
+            for _, s_row in df_all_staff_roster.iterrows():
                 s_n = str(s_row['staff_name']).strip()
                 s_l = s_n.lower()
-                h_c = float(s_row.get('hourly_cost', 7.5))
-                if auto_skip_zero_weeks and h_c > 0 and (s_l, m_s) not in active_staff_weeks_set:
+                role_t = str(s_row.get('role_type', 'Τεχνίτρια'))
+                if auto_skip_zero_weeks and role_t == "Τεχνίτρια" and (s_l, m_s) not in active_staff_weeks_set:
                     continue
                 if s_l in wk_m:
                     d_h = calc_shift_hours(wk_m[s_l].get(d_col, ""))
@@ -1590,26 +2187,41 @@ def compute_period_pnl_summary(p_start_d: date, p_end_d: date, p_label: str):
                     p_sched_map[s_n] = p_sched_map.get(s_n, 0.0) + d_h
         c_d += timedelta(days=1)
 
+    p_emp_cost, p_emp_net, p_sup_cost, p_sup_net, _ = compute_accounting_payroll_for_period(p_start_d, p_end_d)
+
     p_decl_h_tot = 0.0
     p_idle_h_tot = 0.0
+    p_prod_lab_tot = 0.0
     p_idle_cost_tot = 0.0
-    for _, s_row in df_staff_db.iterrows():
+    for _, s_row in df_all_staff_roster.iterrows():
         s_n = str(s_row['staff_name']).strip()
         h_c = float(s_row.get('hourly_cost', 7.5))
-        if h_c <= 0:
+        role_t = str(s_row.get('role_type', 'Τεχνίτρια'))
+        if role_t != "Τεχνίτρια":
             continue
         raw_dh = round(p_sched_map.get(s_n, 0.0), 1)
         s_sub = p_comp[p_comp['staff_name'].str.lower() == s_n.lower()]
         pr_h = (s_sub['duration_minutes'].sum() / 60.0) if not s_sub.empty else 0.0
-        if raw_dh <= 0 and len(s_sub) == 0:
+        acct_c = float(p_emp_cost.get(s_n, 0.0))
+        if raw_dh <= 0 and len(s_sub) == 0 and acct_c <= 0:
             continue
         dh = max(raw_dh, round(pr_h, 1))
         ih = max(0.0, dh - pr_h)
-        p_decl_h_tot += dh
-        p_idle_h_tot += ih
-        p_idle_cost_tot += round(ih * h_c, 2)
+        if h_c > 0 or acct_c > 0:
+            p_decl_h_tot += dh
+            p_idle_h_tot += ih
+        if use_accounting_payroll and (acct_c > 0 or h_c == 0):
+            s_pl = round(acct_c * (pr_h / dh), 2) if dh > 0 else 0.0
+            s_ic = round(max(0.0, acct_c - s_pl), 2)
+        else:
+            s_pl = float(s_sub['labor_cost'].sum()) if not s_sub.empty else 0.0
+            s_ic = round(ih * h_c, 2)
+        p_prod_lab_tot += s_pl
+        p_idle_cost_tot += s_ic
 
-    p_idle_cost_tot = round(p_idle_cost_tot, 2)
+    p_sup_effective = round(p_sup_cost, 2) if (use_accounting_payroll and include_support_staff) else 0.0
+    p_prod_lab = round(p_prod_lab_tot, 2)
+    p_idle_cost_tot = round(p_idle_cost_tot + p_sup_effective, 2)
     p_payroll_tot = round(p_prod_lab + p_idle_cost_tot, 2)
     p_occ = (p_prod_h / p_decl_h_tot * 100.0) if p_decl_h_tot > 0 else 0.0
     p_eff_days = max(1.0, p_workdays * (7.0 / 6.0))
@@ -1643,6 +2255,7 @@ def compute_period_pnl_summary(p_start_d: date, p_end_d: date, p_label: str):
         "Καθαρό Κέρδος (€)": p_true_net,
         "Περιθώριο Κέρδους (%)": round(p_margin, 1)
     }
+
 
 # --- 10. ΔΥΝΑΜΙΚΗ ΜΗΧΑΝΗ ΑΞΙΟΛΟΓΗΣΗΣ 6 ΟΙΚΟΝΟΜΙΚΩΝ ΔΕΙΚΤΩΝ (HYBRID ENGINE PART A) ---
 def build_dynamic_cfo_diagnostics():
@@ -2175,10 +2788,19 @@ with tab_cfo:
                     for m_str, pay_val in daily_payroll_by_monday.items():
                         ym_k = m_str[:7]
                         mo_pay[ym_k] = mo_pay.get(ym_k, 0.0) + pay_val
-                    tr_grp['Μισθοδοσία_Βαρδιών'] = [
-                        round(max(float(r['Εργασία_Ραντεβού']), float(mo_pay.get(r['ym_str'], 0.0))), 2)
-                        for _, r in tr_grp.iterrows()
-                    ]
+                    mo_pay_list = []
+                    for _, r in tr_grp.iterrows():
+                        ym_s = str(r['ym_str'])
+                        if use_accounting_payroll:
+                            yr_i, mo_i = int(ym_s[:4]), int(ym_s[5:7])
+                            ms_d = max(start_d, date(yr_i, mo_i, 1))
+                            me_d = min(end_d, date(yr_i, 12, 31) if mo_i == 12 else (date(yr_i, mo_i + 1, 1) - timedelta(days=1)))
+                            ec_m, _, sc_m, _, _ = compute_accounting_payroll_for_period(ms_d, me_d)
+                            tot_m_pay = sum(ec_m.values()) - (0.0 if include_support_staff else sc_m)
+                            mo_pay_list.append(round(max(float(r['Εργασία_Ραντεβού']), tot_m_pay), 2))
+                        else:
+                            mo_pay_list.append(round(max(float(r['Εργασία_Ραντεβού']), float(mo_pay.get(ym_s, 0.0))), 2))
+                    tr_grp['Μισθοδοσία_Βαρδιών'] = mo_pay_list
                     tr_grp['Πάγια'] = round(monthly_fixed, 2)
                     tr_grp['Καθαρό_Κέρδος'] = (
                         tr_grp['Καθαρός_Τζίρος'] - tr_grp['Προμήθειες'] - tr_grp['Υλικά'] - tr_grp['Μισθοδοσία_Βαρδιών'] - tr_grp['Πάγια']
@@ -2191,10 +2813,18 @@ with tab_cfo:
                         Υλικά=('material_cost', 'sum'),
                         Εργασία_Ραντεβού=('labor_cost', 'sum')
                     ).reset_index().sort_values('monday_date_str')
-                    tr_grp['Μισθοδοσία_Βαρδιών'] = [
-                        round(max(float(r['Εργασία_Ραντεβού']), float(daily_payroll_by_monday.get(r['monday_date_str'], 0.0))), 2)
-                        for _, r in tr_grp.iterrows()
-                    ]
+                    wk_pay_list = []
+                    for _, r in tr_grp.iterrows():
+                        m_s_w = str(r['monday_date_str'])
+                        if use_accounting_payroll:
+                            ws_d = max(start_d, datetime.strptime(m_s_w, "%Y-%m-%d").date())
+                            we_d = min(end_d, ws_d + timedelta(days=6))
+                            ec_w, _, sc_w, _, _ = compute_accounting_payroll_for_period(ws_d, we_d)
+                            tot_w_pay = sum(ec_w.values()) - (0.0 if include_support_staff else sc_w)
+                            wk_pay_list.append(round(max(float(r['Εργασία_Ραντεβού']), tot_w_pay), 2))
+                        else:
+                            wk_pay_list.append(round(max(float(r['Εργασία_Ραντεβού']), float(daily_payroll_by_monday.get(m_s_w, 0.0))), 2))
+                    tr_grp['Μισθοδοσία_Βαρδιών'] = wk_pay_list
                     tr_grp['Πάγια'] = tr_grp['monday_date_str'].apply(
                         lambda m: round(monthly_fixed * (7.0 / 30.4375), 2) if wk_counts.get(m, 0) >= 25 else round(monthly_fixed * (3.0 / 30.4375), 2)
                     )
@@ -2205,7 +2835,7 @@ with tab_cfo:
 
                 fig_tr = go.Figure()
                 fig_tr.add_trace(go.Bar(x=tr_grp[x_col_tr], y=tr_grp['Καθαρός_Τζίρος'], name="Καθαρός Τζίρος (προ ΦΠΑ)", marker_color="#38bdf8"))
-                fig_tr.add_trace(go.Bar(x=tr_grp[x_col_tr], y=tr_grp['Μισθοδοσία_Βαρδιών'], name="Μισθοδοσία Βαρδιών", marker_color="#f59e0b"))
+                fig_tr.add_trace(go.Bar(x=tr_grp[x_col_tr], y=tr_grp['Μισθοδοσία_Βαρδιών'], name="Συνολική Μισθοδοσία Εργοδότη", marker_color="#f59e0b"))
                 fig_tr.add_trace(go.Scatter(
                     x=tr_grp[x_col_tr], y=tr_grp['Καθαρό_Κέρδος'],
                     name="Καθαρό Αποτέλεσμα (€)",
@@ -2431,6 +3061,40 @@ with tab_staff:
         st.info("Δεν υπάρχουν δεδομένα προσωπικού για την επιλεγμένη περίοδο.")
     else:
         with st.container(border=True):
+            st.subheader("💶 Ακτινογραφία Μισθοδοσίας Περιόδου (Καθαρά στην Τσέπη vs ΕΦΚΑ/ΦΜΥ vs Κόστος Εργοδότη)", icon=":material/payments:")
+            pm1, pm2, pm3, pm4 = st.columns(4)
+            pm1.metric(
+                "1. Καθαρά στην Τσέπη Εργαζομένων",
+                f"{total_net_pocket_payroll:,.2f} €",
+                "Πληρωτέο ποσό στις εργαζόμενες",
+                delta_color="off",
+                border=True
+            )
+            pm2.metric(
+                "2. ΕΦΚΑ (Εργαζ.+Εργοδ.) & ΦΜΥ",
+                f"{total_efka_tax_payroll:,.2f} €",
+                f"{(total_efka_tax_payroll / max(1.0, total_declared_payroll) * 100):.1f}% του συνολικού κόστους",
+                delta_color="inverse",
+                border=True
+            )
+            pm3.metric(
+                "3. Προσωπικό Άδειας / Υποστήριξης",
+                f"{support_payroll_cost:,.2f} €",
+                "Θεοδώρα / Καθαριότητα / Υποδοχή / ΕΠΑΣ",
+                delta_color="off",
+                border=True
+            )
+            pm4.metric(
+                "4. Συνολικό Κόστος Εργοδότη",
+                f"{total_declared_payroll:,.2f} €",
+                f"{payroll_ratio_pct:.1f}% επί του Καθαρού Τζίρου",
+                delta_color="inverse",
+                border=True
+            )
+
+        st.space("small")
+
+        with st.container(border=True):
             st.subheader("👁️ Οπτική Ακτινογραφία Idle Time ανά Τεχνίτρια (Με μια Ματιά)", icon=":material/timelapse:")
             st.caption(
                 "Το **Πράσινο** δείχνει πόσες ώρες η τεχνίτρια εξυπηρετούσε πελάτισσα. "
@@ -2473,26 +3137,26 @@ with tab_staff:
         with st.container(border=True):
             c_st_h1, c_st_h2 = st.columns([2.5, 1.5], vertical_alignment="center")
             with c_st_h1:
-                st.subheader("👩‍🔧 Ταμείο & Παραγωγικότητα ανά Τεχνίτρια", icon=":material/badge:")
+                st.subheader("👩‍🔧 Ταμείο, Μισθοδοσία & Παραγωγικότητα ανά Τεχνίτρια", icon=":material/badge:")
             with c_st_h2:
                 staff_tbl_mode = st.segmented_control(
                     "Προβολή Πίνακα",
-                    options=["Απλή Προβολή (7 Στήλες)", "Πλήρης Λογιστική Προβολή"],
-                    default="Απλή Προβολή (7 Στήλες)",
+                    options=["Απλή Προβολή (9 Στήλες)", "Πλήρης Λογιστική Προβολή"],
+                    default="Απλή Προβολή (9 Στήλες)",
                     key="staff_tbl_mode_ctrl"
                 )
 
-            if staff_tbl_mode == "Απλή Προβολή (7 Στήλες)":
+            if staff_tbl_mode.startswith("Απλή"):
                 cols_to_show = [
                     "Τεχνίτρια", "Ραντεβού", "Ώρες Βάρδιας", "Παραγωγικές Ώρες",
-                    "Νεκρές Ώρες (Idle)", "Πληρότητα (%)", "Πραγματικό Ισοζύγιο (€)"
+                    "Πληρότητα (%)", "Καθαρά στην Τσέπη (€)", "ΕΦΚΑ & ΦΜΥ (€)", "Μισθοδοσία (€)", "Πραγματικό Ισοζύγιο (€)"
                 ]
             else:
                 cols_to_show = [
                     "Τεχνίτρια", "Ενεργές Εβδ.", "Ραντεβού", "Μικρά Ραντεβού (≤15')",
                     "Ώρες Βάρδιας", "Παραγωγικές Ώρες", "Νεκρές Ώρες (Idle)", "Πληρότητα (%)",
                     "Μικτός Τζίρος (€)", "Καθαρός Τζίρος (€)", "Προμήθειες TW (€)", "Υλικά (€)",
-                    "Μισθοδοσία (€)", "Κόστος Νεκρού Χρόνου (€)", "Πραγματικό Ισοζύγιο (€)"
+                    "Καθαρά στην Τσέπη (€)", "ΕΦΚΑ & ΦΜΥ (€)", "Μισθοδοσία (€)", "Κόστος Νεκρού Χρόνου (€)", "Πραγματικό Ισοζύγιο (€)"
                 ]
 
             st.dataframe(
@@ -2501,7 +3165,9 @@ with tab_staff:
                 width="stretch",
                 column_config={
                     "Πληρότητα (%)": st.column_config.ProgressColumn("Πληρότητα %", min_value=0, max_value=100, format="%.1f%%"),
-                    "Μισθοδοσία (€)": st.column_config.NumberColumn("Μισθοδοσία (€)", format="%.2f €"),
+                    "Καθαρά στην Τσέπη (€)": st.column_config.NumberColumn("Καθαρά Τσέπης (€)", format="%.2f €"),
+                    "ΕΦΚΑ & ΦΜΥ (€)": st.column_config.NumberColumn("ΕΦΚΑ & ΦΜΥ (€)", format="%.2f €"),
+                    "Μισθοδοσία (€)": st.column_config.NumberColumn("Κόστος Εργοδότη (€)", format="%.2f €"),
                     "Κόστος Νεκρού Χρόνου (€)": st.column_config.NumberColumn("Κόστος Idle (€)", format="%.2f €"),
                     "Μικτός Τζίρος (€)": st.column_config.NumberColumn("Μικτός (€)", format="%.2f €"),
                     "Καθαρός Τζίρος (€)": st.column_config.NumberColumn("Καθαρός προ ΦΠΑ (€)", format="%.2f €"),
@@ -2510,10 +3176,14 @@ with tab_staff:
                     "Πραγματικό Ισοζύγιο (€)": st.column_config.NumberColumn("Καθαρό Ισοζύγιο (€)", format="%+.2f €")
                 }
             )
+            if support_staff_details and use_accounting_payroll and include_support_staff:
+                with st.expander(f"📋 Ανάλυση Προσωπικού Άδειας / Υποστήριξης στην Περίοδο ({support_payroll_cost:,.2f} € συνολικό κόστος)"):
+                    st.dataframe(pd.DataFrame(support_staff_details), hide_index=True, width="stretch")
             st.caption(
                 "💡 **Πώς διαβάζεται το Καθαρό Ισοζύγιο (€):** Είναι ο Καθαρός Τζίρος (προ ΦΠΑ) που έφερε η τεχνίτρια, "
-                "μείον τις προμήθειες Treatwell των ραντεβού της, μείον τα υλικά της, μείον ολόκληρη τη μισθοδοσία της βάρδιάς της."
+                "μείον τις προμήθειες Treatwell των ραντεβού της, μείον τα υλικά της, μείον ολόκληρο το εργοδοτικό κόστος μισθοδοσίας της (Καθαρά + ΕΦΚΑ + ΦΜΥ + Δώρα)."
             )
+
 
         st.space("small")
 
@@ -2905,7 +3575,7 @@ with tab_admin:
         options=[
             "📅 1. Εβδομαδιαίες Βάρδιες (Editor, JSON & AI Screenshots)",
             "📥 2. Εισαγωγή Ραντεβού (Multi-CSV Importer)",
-            "💶 3. Κοστολόγηση (Υπηρεσίες, Προσωπικό & Πάγια)"
+            "💶 3. Κοστολόγηση, Μισθοδοσία & Πάγια"
         ],
         default="📅 1. Εβδομαδιαίες Βάρδιες (Editor, JSON & AI Screenshots)",
         key="admin_sub_nav"
@@ -3160,28 +3830,122 @@ with tab_admin:
                         refresh_data()
 
     else:
-        col_c1, col_c2 = st.columns(2, gap="medium")
-        with col_c1:
-            with st.container(border=True):
-                st.markdown("##### 👩‍🔧 Ωρομίσθια & Προσωπικό (`config_staff`)")
-                ed_staff = st.data_editor(
-                    df_staff_db,
-                    num_rows="dynamic",
-                    hide_index=True,
-                    width="stretch",
-                    key="ed_staff",
-                    column_config={
-                        "staff_name": st.column_config.TextColumn("Όνομα"),
-                        "hourly_cost": st.column_config.NumberColumn("Ωρομίσθιο (€/h)", format="%.2f €"),
-                        "weekly_hours_declared": st.column_config.NumberColumn("Τυπικές Ώρες/Εβδ.", format="%.1f h")
-                    }
-                )
-                if st.button("💾 Αποθήκευση Προσωπικού", type="primary", width="stretch"):
-                    supabase.table("config_staff").upsert(ed_staff.to_dict(orient="records")).execute()
-                    st.toast("Αποθηκεύτηκε το προσωπικό!", icon=":material/check_circle:")
+        df_curr_payroll = get_payroll_profiles_df()
+
+        with st.container(border=True):
+            st.subheader("📑 Κέντρο Διοίκησης Μισθοδοσίας & Κοστολόγησης Προσωπικού (Επίσημες Μισθοδοτικές Καταστάσεις)", icon=":material/badge:")
+            st.caption(
+                "Τα ποσά προέρχονται απευθείας από τις **4 επίσημες μισθοδοτικές καταστάσεις του λογιστή** (2024, 2025, 01-08/2026, 09/2026). "
+                "Μπορείτε να τροποποιήσετε οποιονδήποτε μισθό, καθαρά τσέπης, ΕΦΚΑ, ωρομίσθιο ή ιστορικό κόστος και να πατήσετε **Αποθήκευση** "
+                "ώστε να ενημερωθεί άμεσα ολόκληρο το P&L, η σύγκριση περιόδων και οι δείκτες κερδοφορίας."
+            )
+
+            # Υπολογισμός συνολικών δεικτών τρέχοντος μισθολογίου
+            curr_active_techs = df_curr_payroll[df_curr_payroll["is_active"] & (df_curr_payroll["role_type"] == "Τεχνίτρια")]
+            curr_active_all = df_curr_payroll[df_curr_payroll["is_active"] & (df_curr_payroll["role_type"].isin(["Τεχνίτρια", "Άδεια / Υποστήριξη"]))]
+            tot_reg_cost = float(curr_active_all["monthly_employer_regular"].sum())
+            tot_reg_net = float(curr_active_all["monthly_net_pocket"].sum())
+            tot_reg_efka = float(curr_active_all["monthly_efka_tax"].sum())
+            tot_full_14 = float(curr_active_all["monthly_employer_full_14"].sum())
+
+            tot_c2024 = float(df_curr_payroll["cost_2024"].sum())
+            tot_n2024 = float(df_curr_payroll["net_2024"].sum())
+            tot_c2025 = float(df_curr_payroll["cost_2025"].sum())
+            tot_n2025 = float(df_curr_payroll["net_2025"].sum())
+            tot_c2026_8m = float(df_curr_payroll["cost_2026_jan_aug"].sum())
+            tot_c2026_sep = float(df_curr_payroll["cost_2026_sep"].sum())
+
+            kpi_p1, kpi_p2, kpi_p3, kpi_p4, kpi_p5 = st.columns(5)
+            kpi_p1.metric(
+                "1. Τρέχον Τακτικό / Μήνα",
+                f"{tot_reg_cost:,.2f} €",
+                f"Καθαρά Τσέπης: {tot_reg_net:,.2f} € | ΕΦΚΑ: {tot_reg_efka:,.2f} €",
+                delta_color="off",
+                border=True
+            )
+            kpi_p2.metric(
+                "2. Πλήρες με Δώρα (×14/12)",
+                f"{tot_full_14:,.2f} € / μήνα",
+                f"+{(tot_full_14 - tot_reg_cost):,.2f} € πρόβλεψη δώρων/αδείας",
+                delta_color="off",
+                border=True
+            )
+            kpi_p3.metric(
+                "3. Επίσημο 2024 (Λογιστής)",
+                f"{tot_c2024:,.2f} €",
+                f"Καθαρά: {tot_n2024:,.2f} € (ΕΦΚΑ+ΦΜΥ: {(tot_c2024 - tot_n2024):,.2f} €)",
+                delta_color="off",
+                border=True
+            )
+            kpi_p4.metric(
+                "4. Επίσημο 2025 (Λογιστής)",
+                f"{tot_c2025:,.2f} €",
+                f"Καθαρά: {tot_n2025:,.2f} € (ΕΦΚΑ+ΦΜΥ: {(tot_c2025 - tot_n2025):,.2f} €)",
+                delta_color="off",
+                border=True
+            )
+            kpi_p5.metric(
+                "5. Επίσημο 2026 (Ιαν–Σεπτ)",
+                f"{(tot_c2026_8m + tot_c2026_sep):,.2f} €",
+                f"8μηνο: {tot_c2026_8m:,.0f} € | Σεπτ: {tot_c2026_sep:,.0f} €",
+                delta_color="off",
+                border=True
+            )
+
+            st.space("small")
+            auto_recalc_chk = st.checkbox(
+                "⚡ Αυτόματος επανυπολογισμός Πλήρους Μηνιαίου Κόστους (×14/12) & Ωρομισθίου όταν αλλάζετε Καθαρά Τσέπης, ΕΦΚΑ ή Ώρες/Εβδομάδα",
+                value=True,
+                key="chk_auto_recalc_payroll",
+                help="Όταν είναι ενεργό, υπολογίζει αυτόματα: Τακτικό Κόστος = Καθαρά + ΕΦΚΑ, Πλήρες Κόστος = Τακτικό × 14/12, και Ωρομίσθιο = Πλήρες Κόστος / Μηνιαίες Ώρες."
+            )
+
+            ed_payroll_df = st.data_editor(
+                df_curr_payroll,
+                hide_index=True,
+                num_rows="dynamic",
+                width="stretch",
+                key="ed_payroll_grid",
+                column_config={
+                    "staff_name": st.column_config.TextColumn("Εργαζόμενος", required=True),
+                    "payroll_code": st.column_config.TextColumn("Κωδικός Μισθοδοσίας (ΑΠΔ / ΙΚΑ)"),
+                    "role_type": st.column_config.SelectboxColumn("Ρόλος", options=["Τεχνίτρια", "Άδεια / Υποστήριξη", "Ιδιοκτήτης / Διοίκηση"], required=True),
+                    "is_active": st.column_config.CheckboxColumn("Ενεργός Σήμερα"),
+                    "weekly_hours_declared": st.column_config.NumberColumn("Ώρες/Εβδ.", format="%.1f h"),
+                    "nominal_gross": st.column_config.NumberColumn("Μικτός Σύμβασης (€)", format="%.2f €"),
+                    "monthly_net_pocket": st.column_config.NumberColumn("Καθαρά Τσέπης / Μήνα (€)", format="%.2f €"),
+                    "monthly_efka_tax": st.column_config.NumberColumn("ΕΦΚΑ & ΦΜΥ / Μήνα (€)", format="%.2f €"),
+                    "monthly_employer_regular": st.column_config.NumberColumn("Τακτικό Κόστος Εργοδότη (€)", format="%.2f €"),
+                    "monthly_employer_full_14": st.column_config.NumberColumn("Πλήρες με Δώρα (×14/12) (€)", format="%.2f €"),
+                    "hourly_cost": st.column_config.NumberColumn("Ωρομίσθιο (€/h)", format="%.2f €/h"),
+                    "cost_2024": st.column_config.NumberColumn("Κόστος 2024 (€)", format="%.2f €"),
+                    "net_2024": st.column_config.NumberColumn("Καθαρά 2024 (€)", format="%.2f €"),
+                    "cost_2025": st.column_config.NumberColumn("Κόστος 2025 (€)", format="%.2f €"),
+                    "net_2025": st.column_config.NumberColumn("Καθαρά 2025 (€)", format="%.2f €"),
+                    "cost_2026_jan_aug": st.column_config.NumberColumn("Κόστος 01-08/2026 (€)", format="%.2f €"),
+                    "net_2026_jan_aug": st.column_config.NumberColumn("Καθαρά 01-08/2026 (€)", format="%.2f €"),
+                    "cost_2026_sep": st.column_config.NumberColumn("Κόστος 09/2026 (€)", format="%.2f €"),
+                    "net_2026_sep": st.column_config.NumberColumn("Καθαρά 09/2026 (€)", format="%.2f €"),
+                    "notes": st.column_config.TextColumn("Σημειώσεις")
+                }
+            )
+
+            c_btn_p1, c_btn_p2 = st.columns([1.5, 1.5], gap="medium")
+            with c_btn_p1:
+                if st.button("💾 Αποθήκευση Μητρώου Μισθοδοσίας & Ενημέρωση P&L", type="primary", width="stretch", key="btn_save_payroll_prof"):
+                    save_payroll_profiles_df(ed_payroll_df, auto_recalc_rates=auto_recalc_chk)
+                    st.toast("✅ Το μητρώο μισθοδοσίας και τα ωρομίσθια αποθηκεύτηκαν επιτυχώς στη βάση!", icon=":material/check_circle:")
+                    refresh_data()
+            with c_btn_p2:
+                if st.button("🔄 Επαναφορά στα Επίσημα Εκκαθαριστικά Λογιστή", width="stretch", key="btn_reset_payroll_prof"):
+                    save_payroll_profiles_df(pd.DataFrame(DEFAULT_PAYROLL_LEDGER), auto_recalc_rates=False)
+                    st.toast("Επαναφέρθηκαν τα επίσημα στοιχεία των μισθοδοτικών καταστάσεων!", icon=":material/restore:")
                     refresh_data()
 
-        with col_c2:
+        st.space("small")
+
+        col_c1, col_c2 = st.columns(2, gap="medium")
+        with col_c1:
             with st.container(border=True):
                 st.markdown("##### 🏢 Μηνιαία Πάγια Έξοδα (`expenses_log`)")
                 ed_exp = st.data_editor(
@@ -3195,32 +3959,32 @@ with tab_admin:
                         "amount": st.column_config.NumberColumn("Μηνιαίο Ποσό (€)", format="%.2f €")
                     }
                 )
-                if st.button("💾 Αποθήκευση Παγίων", type="primary", width="stretch"):
+                if st.button("💾 Αποθήκευση Παγίων", type="primary", width="stretch", key="btn_save_expenses"):
                     supabase.table("expenses_log").delete().neq("expense_month", "0000").execute()
                     supabase.table("expenses_log").insert(ed_exp.to_dict(orient="records")).execute()
                     st.toast("Αποθηκεύτηκαν τα πάγια έξοδα!", icon=":material/check_circle:")
                     refresh_data()
 
-        st.space("small")
-        with st.container(border=True):
-            st.markdown("##### 💅 Κοστολόγηση Υπηρεσιών & Προϊόντων Λιανικής (`config_services`)")
-            st.caption("Επεξεργαστείτε τη διάρκεια (σε λεπτά), την τιμή καταλόγου και το εκτιμώμενο κόστος αναλωσίμων υλικών ανά υπηρεσία:")
-            ed_srv = st.data_editor(
-                df_services_db,
-                num_rows="dynamic",
-                hide_index=True,
-                width="stretch",
-                key="ed_services_cat",
-                column_config={
-                    "service_name": st.column_config.TextColumn("Υπηρεσία / Προϊόν"),
-                    "category": st.column_config.TextColumn("Κατηγορία"),
-                    "base_duration": st.column_config.NumberColumn("Διάρκεια (λεπτά)", format="%d'"),
-                    "gross_price": st.column_config.NumberColumn("Τιμή Καταλόγου (€)", format="%.2f €"),
-                    "material_cost_estimate": st.column_config.NumberColumn("Κόστος Υλικών (€)", format="%.2f €"),
-                    "price_variants_json": st.column_config.TextColumn("Παραλλαγές (JSON)")
-                }
-            )
-            if st.button("💾 Αποθήκευση Καταλόγου Υπηρεσιών & Υλικών", type="primary", width="stretch"):
-                supabase.table("config_services").upsert(ed_srv.to_dict(orient="records")).execute()
-                st.toast("Αποθηκεύτηκε ο κατάλογος υπηρεσιών!", icon=":material/check_circle:")
-                refresh_data()
+        with col_c2:
+            with st.container(border=True):
+                st.markdown("##### 💅 Κοστολόγηση Υπηρεσιών & Προϊόντων Λιανικής (`config_services`)")
+                st.caption("Επεξεργαστείτε τη διάρκεια (σε λεπτά), την τιμή καταλόγου και το εκτιμώμενο κόστος αναλωσίμων υλικών ανά υπηρεσία:")
+                ed_srv = st.data_editor(
+                    df_services_db,
+                    num_rows="dynamic",
+                    hide_index=True,
+                    width="stretch",
+                    key="ed_services_cat",
+                    column_config={
+                        "service_name": st.column_config.TextColumn("Υπηρεσία / Προϊόν"),
+                        "category": st.column_config.TextColumn("Κατηγορία"),
+                        "base_duration": st.column_config.NumberColumn("Διάρκεια (λεπτά)", format="%d'"),
+                        "gross_price": st.column_config.NumberColumn("Τιμή Καταλόγου (€)", format="%.2f €"),
+                        "material_cost_estimate": st.column_config.NumberColumn("Κόστος Υλικών (€)", format="%.2f €"),
+                        "price_variants_json": st.column_config.TextColumn("Παραλλαγές (JSON)")
+                    }
+                )
+                if st.button("💾 Αποθήκευση Καταλόγου Υπηρεσιών & Υλικών", type="primary", width="stretch", key="btn_save_services_cat"):
+                    supabase.table("config_services").upsert(ed_srv.to_dict(orient="records")).execute()
+                    st.toast("Αποθηκεύτηκε ο κατάλογος υπηρεσιών!", icon=":material/check_circle:")
+                    refresh_data()
