@@ -324,13 +324,14 @@ import urllib.error
 
 DEFAULT_MODELS_BY_PROVIDER = {
     "Google Gemini": [
-        "gemini-2.5-pro",
         "gemini-3.1-pro-preview",
+        "gemini-4-argon",
+        "gemini-3.8-flash",
         "gemini-pro-latest",
-        "gemini-2.5-flash",
-        "gemini-3.0-flash",
+        "gemini-flash-latest",
         "gemini-3-flash-preview",
-        "gemini-flash-latest"
+        "gemini-2.5-pro",
+        "gemini-2.5-flash"
     ],
     "OpenAI (ChatGPT)": [
         "gpt-5",
@@ -543,16 +544,16 @@ def call_gemini_smart(api_key, contents, expect_json=False, preferred_model="gem
                 raise e
         raise last_err
 
-    # 3. Google Gemini (Pro & Flash με έξυπνο fallback αν υπάρξει 404 ή Free-Tier Quota 429 σε συγκεκριμένο μοντέλο)
+    # 3. Google Gemini (Pro, Argon & Flash με έξυπνο fallback αν υπάρξει 404 ή Free-Tier Quota 429 σε συγκεκριμένο μοντέλο)
     client = genai.Client(api_key=api_key)
     candidate_models = [
         preferred_model,
-        "gemini-2.5-pro",
+        "gemini-3.1-pro-preview",
+        "gemini-3.8-flash",
+        "gemini-4-argon",
         "gemini-pro-latest",
-        "gemini-2.5-flash",
-        "gemini-3.0-flash",
-        "gemini-3-flash-preview",
-        "gemini-flash-latest"
+        "gemini-flash-latest",
+        "gemini-3-flash-preview"
     ]
     seen = set()
     ordered_models = [m for m in candidate_models if m and not (m in seen or seen.add(m))]
