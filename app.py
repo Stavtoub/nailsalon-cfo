@@ -74,14 +74,7 @@ MONTHS_GR = {
     9: "Σεπτέμβριος", 10: "Οκτώβριος", 11: "Νοέμβριος", 12: "Δεκέμβριος"
 }
 
-DEFAULT_SCREENSHOT_SCHEDULE = [
-    {"staff_name": "Νάντια",      "Δευτέρα": "18:00 - 20:30", "Τρίτη": "",              "Τετάρτη": "17:30 - 20:30", "Πέμπτη": "18:00 - 20:00", "Παρασκευή": "18:00 - 20:30", "Σάββατο": ""},
-    {"staff_name": "Κατερίνα",    "Δευτέρα": "09:00 - 15:00", "Τρίτη": "14:30 - 20:30", "Τετάρτη": "09:00 - 15:00", "Πέμπτη": "14:30 - 20:30", "Παρασκευή": "09:00 - 15:00", "Σάββατο": ""},
-    {"staff_name": "Κατερίνα Π.", "Δευτέρα": "12:30 - 20:30", "Τρίτη": "10:00 - 18:00", "Τετάρτη": "10:00 - 18:00", "Πέμπτη": "10:00 - 18:00", "Παρασκευή": "10:00 - 18:00", "Σάββατο": ""},
-    {"staff_name": "Δόμνα",       "Δευτέρα": "",              "Τρίτη": "12:30 - 20:30", "Τετάρτη": "12:30 - 20:30", "Πέμπτη": "12:30 - 20:30", "Παρασκευή": "12:30 - 20:30", "Σάββατο": "09:00 - 16:00"},
-    {"staff_name": "Δημήτρης",    "Δευτέρα": "09:00 - 20:30", "Τρίτη": "09:00 - 20:30", "Τετάρτη": "09:00 - 20:30", "Πέμπτη": "09:00 - 20:30", "Παρασκευή": "09:00 - 20:30", "Σάββατο": "09:00 - 16:00"},
-    {"staff_name": "Αντιγόνη",    "Δευτέρα": "",              "Τρίτη": "16:30 - 20:30", "Τετάρτη": "16:30 - 20:30", "Πέμπτη": "16:30 - 20:30", "Παρασκευή": "16:30 - 20:30", "Σάββατο": "12:00 - 16:00"}
-]
+DEFAULT_SCREENSHOT_SCHEDULE = []
 
 def normalize_greek_name(text):
     if pd.isna(text) or not str(text).strip():
@@ -661,319 +654,55 @@ def save_multiple_week_schedules_to_db(schedules_map, update_default=False):
             supabase.table("config_services").upsert(payloads[i:i+50]).execute()
     return len(dedup_map)
 
-# --- 4Β. ΕΠΙΣΗΜΟ ΜΗΤΡΩΟ ΜΙΣΘΟΔΟΣΙΑΣ & ΚΟΣΤΟΛΟΓΗΣΗΣ ΠΡΟΣΩΠΙΚΟΥ (ΑΠΟ ΤΙΣ ΜΙΣΘΟΔΟΤΙΚΕΣ ΚΑΤΑΣΤΑΣΕΙΣ 2024-2026) ---
-DEFAULT_PAYROLL_LEDGER = [
-    {
-        "staff_name": "Κατερίνα Π.",
-        "payroll_code": "MCN002 - ΑΙΚΑΤΕΡΙΝΗ ΠΑΥΛΟΣ",
-        "role_type": "Τεχνίτρια",
-        "is_active": True,
-        "weekly_hours_declared": 40.0,
-        "nominal_gross": 1012.00,
-        "monthly_net_pocket": 916.47,
-        "monthly_efka_tax": 316.19,
-        "monthly_employer_regular": 1232.66,
-        "monthly_employer_full_14": 1438.10,
-        "hourly_cost": 8.63,
-        "cost_2024": 0.00,
-        "net_2024": 0.00,
-        "cost_2025": 13706.26,
-        "net_2025": 10114.06,
-        "cost_2026_jan_aug": 10411.70,
-        "net_2026_jan_aug": 7722.12,
-        "cost_2026_sep": 1232.66,
-        "net_2026_sep": 916.47,
-        "notes": "Πλήρης απασχόληση (40h/εβδ.). Τακτικό κόστος 1.232,66€/μήνα (916,47€ καθαρά στην τσέπη)."
-    },
-    {
-        "staff_name": "Κατερίνα",
-        "payroll_code": "MCN009 - ΑΙΚΑΤΕΡΙΝΗ ΓΕΩΡΓΙΟΣ (2024: MCN002)",
-        "role_type": "Τεχνίτρια",
-        "is_active": True,
-        "weekly_hours_declared": 40.0,
-        "nominal_gross": 920.00,
-        "monthly_net_pocket": 836.58,
-        "monthly_efka_tax": 283.89,
-        "monthly_employer_regular": 1120.47,
-        "monthly_employer_full_14": 1307.22,
-        "hourly_cost": 7.84,
-        "cost_2024": 8107.25,
-        "net_2024": 5931.72,
-        "cost_2025": 912.85,
-        "net_2025": 677.77,
-        "cost_2026_jan_aug": 9975.31,
-        "net_2026_jan_aug": 7466.00,
-        "cost_2026_sep": 1120.47,
-        "net_2026_sep": 836.58,
-        "notes": "Πλήρης απασχόληση (40h/εβδ.). Τακτικό κόστος 1.120,47€/μήνα (836,58€ καθαρά στην τσέπη)."
-    },
-    {
-        "staff_name": "Δόμνα",
-        "payroll_code": "MCN010 - ΔΟΜΝΙΚΗ ΑΘΑΝΑΣΙΟΣ",
-        "role_type": "Τεχνίτρια",
-        "is_active": True,
-        "weekly_hours_declared": 40.0,
-        "nominal_gross": 920.00,
-        "monthly_net_pocket": 859.24,
-        "monthly_efka_tax": 201.06,
-        "monthly_employer_regular": 1060.30,
-        "monthly_employer_full_14": 1237.02,
-        "hourly_cost": 7.42,
-        "cost_2024": 0.00,
-        "net_2024": 0.00,
-        "cost_2025": 2059.87,
-        "net_2025": 1636.53,
-        "cost_2026_jan_aug": 9333.39,
-        "net_2026_jan_aug": 7566.03,
-        "cost_2026_sep": 1060.30,
-        "net_2026_sep": 859.24,
-        "notes": "Πλήρης απασχόληση (40h/εβδ., μειωμένος ΕΦΚΑ). Τακτικό κόστος 1.060,30€/μήνα (859,24€ καθαρά)."
-    },
-    {
-        "staff_name": "Αντιγόνη",
-        "payroll_code": "MCN012 - ΑΝΤΙΓΟΝΗ ΣΤΥΛΙΑΝΟΣ",
-        "role_type": "Τεχνίτρια",
-        "is_active": True,
-        "weekly_hours_declared": 21.0,
-        "nominal_gross": 485.76,
-        "monthly_net_pocket": 433.55,
-        "monthly_efka_tax": 142.68,
-        "monthly_employer_regular": 576.23,
-        "monthly_employer_full_14": 672.27,
-        "hourly_cost": 7.64,
-        "cost_2024": 0.00,
-        "net_2024": 0.00,
-        "cost_2025": 0.00,
-        "net_2025": 0.00,
-        "cost_2026_jan_aug": 0.00,
-        "net_2026_jan_aug": 0.00,
-        "cost_2026_sep": 157.16,
-        "net_2026_sep": 118.24,
-        "notes": "Μερική απασχόληση (~21h/εβδ., πρόσληψη τέλη Σεπτ. 2026). Σεπτ. 6 ημ.: 157,16€ κόστος / 118,24€ καθαρά."
-    },
-    {
-        "staff_name": "Νάνσυ",
-        "payroll_code": "MCN001 - ΑΝΑΣΤΑΣΙΑ ΧΡΗΣΤΟΣ",
-        "role_type": "Τεχνίτρια",
-        "is_active": False,
-        "weekly_hours_declared": 40.0,
-        "nominal_gross": 1104.00,
-        "monthly_net_pocket": 982.00,
-        "monthly_efka_tax": 362.00,
-        "monthly_employer_regular": 1344.00,
-        "monthly_employer_full_14": 1568.00,
-        "hourly_cost": 8.78,
-        "cost_2024": 8634.33,
-        "net_2024": 6260.73,
-        "cost_2025": 16311.01,
-        "net_2025": 11749.92,
-        "cost_2026_jan_aug": 11709.65,
-        "net_2026_jan_aug": 8281.18,
-        "cost_2026_sep": 1865.33,
-        "net_2026_sep": 1450.27,
-        "notes": "Αποχώρησε 12/09/2026 (Σεπτ. 2026: 592,08€ τακτικές + 796,27€ Δώρο Χριστ. + 476,98€ Αποζ. Αδείας = 1.865,33€)."
-    },
-    {
-        "staff_name": "Άννα",
-        "payroll_code": "MCN008 - ΑΝΝΑ ΣΤΑΥΡΟΣ",
-        "role_type": "Τεχνίτρια",
-        "is_active": False,
-        "weekly_hours_declared": 32.0,
-        "nominal_gross": 920.00,
-        "monthly_net_pocket": 830.00,
-        "monthly_efka_tax": 280.00,
-        "monthly_employer_regular": 1110.00,
-        "monthly_employer_full_14": 1295.00,
-        "hourly_cost": 7.98,
-        "cost_2024": 3484.43,
-        "net_2024": 2732.29,
-        "cost_2025": 10534.39,
-        "net_2025": 8110.26,
-        "cost_2026_jan_aug": 0.00,
-        "net_2026_jan_aug": 0.00,
-        "cost_2026_sep": 0.00,
-        "net_2026_sep": 0.00,
-        "notes": "Πρώην τεχνίτρια (εργάστηκε έως Νοέμβριο 2025)."
-    },
-    {
-        "staff_name": "Μιχριμπάν",
-        "payroll_code": "MCN004 - ΜΙΧΡΙΜΠΑΝ ΜΕΜΕΤ",
-        "role_type": "Τεχνίτρια",
-        "is_active": False,
-        "weekly_hours_declared": 30.0,
-        "nominal_gross": 885.00,
-        "monthly_net_pocket": 790.00,
-        "monthly_efka_tax": 265.00,
-        "monthly_employer_regular": 1055.00,
-        "monthly_employer_full_14": 1230.00,
-        "hourly_cost": 8.03,
-        "cost_2024": 6307.31,
-        "net_2024": 4964.98,
-        "cost_2025": 10036.82,
-        "net_2025": 7787.84,
-        "cost_2026_jan_aug": 0.00,
-        "net_2026_jan_aug": 0.00,
-        "cost_2026_sep": 0.00,
-        "net_2026_sep": 0.00,
-        "notes": "Πρώην τεχνίτρια (εργάστηκε έως Οκτώβριο 2025)."
-    },
-    {
-        "staff_name": "Θεοδώρα (Άδεια)",
-        "payroll_code": "MCN007 & MCN003 - ΘΕΟΔΩΡΑ (Αισθητικός Ποδιών)",
-        "role_type": "Άδεια / Υποστήριξη",
-        "is_active": True,
-        "weekly_hours_declared": 4.0,
-        "nominal_gross": 96.76,
-        "monthly_net_pocket": 76.51,
-        "monthly_efka_tax": 31.05,
-        "monthly_employer_regular": 107.56,
-        "monthly_employer_full_14": 125.49,
-        "hourly_cost": 0.00,
-        "cost_2024": 2558.15,
-        "net_2024": 1771.00,
-        "cost_2025": 1631.86,
-        "net_2025": 1160.76,
-        "cost_2026_jan_aug": 984.39,
-        "net_2026_jan_aug": 700.21,
-        "cost_2026_sep": 107.56,
-        "net_2026_sep": 76.51,
-        "notes": "Αισθητικός ποδιών (υπεύθυνη άδειας λειτουργίας, 4 ημέρες/μήνα). Σταθερό κόστος μισθοδοσίας."
-    },
-    {
-        "staff_name": "Olta (Καθαρίστρια)",
-        "payroll_code": "MCN006 - OLTA NDRICIM",
-        "role_type": "Άδεια / Υποστήριξη",
-        "is_active": False,
-        "weekly_hours_declared": 0.0,
-        "nominal_gross": 623.56,
-        "monthly_net_pocket": 0.00,
-        "monthly_efka_tax": 0.00,
-        "monthly_employer_regular": 0.00,
-        "monthly_employer_full_14": 0.00,
-        "hourly_cost": 0.00,
-        "cost_2024": 5571.07,
-        "net_2024": 3984.91,
-        "cost_2025": 1733.79,
-        "net_2025": 1233.25,
-        "cost_2026_jan_aug": 0.00,
-        "net_2026_jan_aug": 0.00,
-        "cost_2026_sep": 0.00,
-        "net_2026_sep": 0.00,
-        "notes": "Καθαρίστρια στη μισθοδοσία 2024 (5.571,07€) και αρχών 2025 (1.733,79€)."
-    },
-    {
-        "staff_name": "Λαμπρινή (Υποδοχή)",
-        "payroll_code": "MCN005 - ΛΑΜΠΡΙΝΗ ΚΩΝΣΤΑΝΤΙΝΟΣ",
-        "role_type": "Άδεια / Υποστήριξη",
-        "is_active": False,
-        "weekly_hours_declared": 0.0,
-        "nominal_gross": 830.00,
-        "monthly_net_pocket": 0.00,
-        "monthly_efka_tax": 0.00,
-        "monthly_employer_regular": 0.00,
-        "monthly_employer_full_14": 0.00,
-        "hourly_cost": 0.00,
-        "cost_2024": 6633.87,
-        "net_2024": 4925.67,
-        "cost_2025": 0.00,
-        "net_2025": 0.00,
-        "cost_2026_jan_aug": 0.00,
-        "net_2026_jan_aug": 0.00,
-        "cost_2026_sep": 0.00,
-        "net_2026_sep": 0.00,
-        "notes": "Υπάλληλος υποδοχής το 2024 (6.633,87€ συνολικό κόστος / 4.925,67€ καθαρά)."
-    },
-    {
-        "staff_name": "Μαρία (Πρακτική ΕΠΑΣ)",
-        "payroll_code": "MCN011 - ΜΑΡΙΑ ΙΩΑΝΝΗΣ",
-        "role_type": "Άδεια / Υποστήριξη",
-        "is_active": False,
-        "weekly_hours_declared": 0.0,
-        "nominal_gross": 0.00,
-        "monthly_net_pocket": 0.00,
-        "monthly_efka_tax": 0.00,
-        "monthly_employer_regular": 0.00,
-        "monthly_employer_full_14": 0.00,
-        "hourly_cost": 0.00,
-        "cost_2024": 0.00,
-        "net_2024": 0.00,
-        "cost_2025": 0.00,
-        "net_2025": 0.00,
-        "cost_2026_jan_aug": 1642.05,
-        "net_2026_jan_aug": 1404.91,
-        "cost_2026_sep": 0.00,
-        "net_2026_sep": 0.00,
-        "notes": "Πρακτική άσκηση ΕΠΑΣ (70 ημ. στο 1ο οκτάμηνο 2026: 1.642,05€ κόστος / 1.404,91€ καθαρά)."
-    },
-    {
-        "staff_name": "Νάντια",
-        "payroll_code": "ΙΔΙΟΚΤΗΤΡΙΑ (Εκτός Μισθοδοσίας ΙΚΑ)",
-        "role_type": "Τεχνίτρια",
-        "is_active": True,
-        "weekly_hours_declared": 14.0,
-        "nominal_gross": 0.00,
-        "monthly_net_pocket": 0.00,
-        "monthly_efka_tax": 0.00,
-        "monthly_employer_regular": 0.00,
-        "monthly_employer_full_14": 0.00,
-        "hourly_cost": 0.00,
-        "cost_2024": 0.00,
-        "net_2024": 0.00,
-        "cost_2025": 0.00,
-        "net_2025": 0.00,
-        "cost_2026_jan_aug": 0.00,
-        "net_2026_jan_aug": 0.00,
-        "cost_2026_sep": 0.00,
-        "net_2026_sep": 0.00,
-        "notes": "Ιδιοκτήτρια / Τεχνίτρια (εκτός μισθοδοσίας ΙΚΑ). Μπορείτε να ορίσετε τεκμαρτό ωρομίσθιο αν επιθυμείτε."
-    },
-    {
-        "staff_name": "Δημήτρης",
-        "payroll_code": "ΔΙΟΙΚΗΣΗ / ΥΠΟΔΟΧΗ (Εκτός ΙΚΑ)",
-        "role_type": "Ιδιοκτήτης / Διοίκηση",
-        "is_active": True,
-        "weekly_hours_declared": 64.5,
-        "nominal_gross": 0.00,
-        "monthly_net_pocket": 0.00,
-        "monthly_efka_tax": 0.00,
-        "monthly_employer_regular": 0.00,
-        "monthly_employer_full_14": 0.00,
-        "hourly_cost": 0.00,
-        "cost_2024": 0.00,
-        "net_2024": 0.00,
-        "cost_2025": 0.00,
-        "net_2025": 0.00,
-        "cost_2026_jan_aug": 0.00,
-        "net_2026_jan_aug": 0.00,
-        "cost_2026_sep": 0.00,
-        "net_2026_sep": 0.00,
-        "notes": "Διοίκηση / Υποδοχή καταστήματος (εκτός μισθοδοσίας ΙΚΑ)."
-    }
+# --- 4Β. ΜΗΤΡΩΟ ΜΙΣΘΟΔΟΣΙΑΣ & ΚΟΣΤΟΛΟΓΗΣΗΣ ΠΡΟΣΩΠΙΚΟΥ (100% ΔΥΝΑΜΙΚΑ ΑΠΟ ΤΗ ΒΑΣΗ SUPABASE) ---
+DEFAULT_PAYROLL_COLUMNS = [
+    "staff_name", "payroll_code", "role_type", "is_active", "weekly_hours_declared",
+    "nominal_gross", "monthly_net_pocket", "monthly_efka_tax", "monthly_employer_regular",
+    "monthly_employer_full_14", "hourly_cost", "cost_2024", "net_2024",
+    "cost_2025", "net_2025", "cost_2026_jan_aug", "net_2026_jan_aug",
+    "cost_2026_sep", "net_2026_sep", "notes"
 ]
 
 def get_payroll_profiles_df() -> pd.DataFrame:
-    """Φορτώνει το πλήρες μητρώο μισθοδοσίας από το __PAYROLL_PROFILES__ (ή συγχωνεύει με το DEFAULT_PAYROLL_LEDGER)."""
-    saved_list = load_app_config_json("__PAYROLL_PROFILES__")
-    default_map = {r["staff_name"]: dict(r) for r in DEFAULT_PAYROLL_LEDGER}
-    if isinstance(saved_list, list) and len(saved_list) > 0:
-        merged_rows = []
-        seen_names = set()
-        for item in saved_list:
-            if not isinstance(item, dict) or not item.get("staff_name"):
-                continue
-            s_name = str(item["staff_name"]).strip()
-            seen_names.add(s_name)
-            base_row = dict(default_map.get(s_name, DEFAULT_PAYROLL_LEDGER[0]))
-            base_row.update(item)
-            merged_rows.append(base_row)
-        for def_r in DEFAULT_PAYROLL_LEDGER:
-            if def_r["staff_name"] not in seen_names:
-                merged_rows.append(dict(def_r))
-        return pd.DataFrame(merged_rows)
-    return pd.DataFrame([dict(r) for r in DEFAULT_PAYROLL_LEDGER])
+    """Φορτώνει το πλήρες μητρώο μισθοδοσίας αποκλειστικά από τον πίνακα payroll_ledger της βάσης Supabase."""
+    try:
+        res = supabase.table("payroll_ledger").select("*").order("id").execute()
+        if res.data and len(res.data) > 0:
+            df_p = pd.DataFrame(res.data)
+            for c in DEFAULT_PAYROLL_COLUMNS:
+                if c not in df_p.columns:
+                    df_p[c] = 0.0 if any(k in c for k in ["cost", "net", "nominal", "monthly", "hourly", "hours"]) else ""
+            return df_p
+    except Exception:
+        pass
+
+    # Δυναμικό fallback από τον πίνακα config_staff (χωρίς κανένα hardcoded όνομα στον κώδικα)
+    try:
+        if not df_staff_db.empty:
+            rows = []
+            for _, srow in df_staff_db.iterrows():
+                sname = str(srow.get("staff_name", "")).strip()
+                if not sname:
+                    continue
+                h_cost = float(srow.get("hourly_cost", 0.0) or 0.0)
+                w_hrs = float(srow.get("weekly_hours_declared", 40.0) or 40.0)
+                rows.append({
+                    "staff_name": sname, "payroll_code": "", "role_type": "Τεχνίτρια",
+                    "is_active": True, "weekly_hours_declared": w_hrs, "nominal_gross": 0.0,
+                    "monthly_net_pocket": 0.0, "monthly_efka_tax": 0.0, "monthly_employer_regular": 0.0,
+                    "monthly_employer_full_14": 0.0, "hourly_cost": h_cost, "cost_2024": 0.0,
+                    "net_2024": 0.0, "cost_2025": 0.0, "net_2025": 0.0, "cost_2026_jan_aug": 0.0,
+                    "net_2026_jan_aug": 0.0, "cost_2026_sep": 0.0, "net_2026_sep": 0.0, "notes": ""
+                })
+            if rows:
+                return pd.DataFrame(rows)
+    except Exception:
+        pass
+
+    return pd.DataFrame(columns=DEFAULT_PAYROLL_COLUMNS)
 
 def save_payroll_profiles_df(df_ed: pd.DataFrame, auto_recalc_rates: bool = True):
-    """Αποθηκεύει το μητρώο μισθοδοσίας στο Supabase (__PAYROLL_PROFILES__) και ενημερώνει αυτόματα το config_staff."""
+    """Αποθηκεύει το μητρώο μισθοδοσίας αποκλειστικά στον πίνακα payroll_ledger της βάσης Supabase."""
     records = []
     staff_table_rows = []
     for _, r in df_ed.iterrows():
@@ -1031,10 +760,14 @@ def save_payroll_profiles_df(df_ed: pd.DataFrame, auto_recalc_rates: bool = True
                 "weekly_hours_declared": wk_h
             })
 
-    save_app_config_json("__PAYROLL_PROFILES__", records)
+    try:
+        supabase.table("payroll_ledger").upsert(records, on_conflict="staff_name").execute()
+    except Exception as e:
+        st.error(f"Σφάλμα αποθήκευσης payroll_ledger στο Supabase: {e}")
+
     if staff_table_rows:
         try:
-            supabase.table("config_staff").upsert(staff_table_rows).execute()
+            supabase.table("config_staff").upsert(staff_table_rows, on_conflict="staff_name").execute()
         except Exception:
             pass
     return records
@@ -1170,12 +903,12 @@ with st.sidebar:
         include_payroll_gifts = st.checkbox(
             "Συμπερίληψη Δώρων, Επιδομάτων (14 μισθοί) & Εκκαθαρίσεων",
             value=True,
-            help="Όταν είναι ενεργό, περιλαμβάνει Δώρο Χριστουγέννων, Δώρο Πάσχα, Επίδομα Αδείας και την εκκαθάριση αποχώρησης Σεπτ. 2026 (Νάνσυ)."
+            help="Όταν είναι ενεργό, περιλαμβάνει Δώρο Χριστουγέννων, Δώρο Πάσχα, Επίδομα Αδείας και τυχόν εκκαθαρίσεις αποχωρήσεων."
         )
         include_support_staff = st.checkbox(
             "Συμπερίληψη Προσωπικού Άδειας / Καθαριότητας / Υποδοχής / ΕΠΑΣ",
             value=True,
-            help="Συμπεριλαμβάνει στη συνολική μισθοδοσία την Αισθητικό Ποδιών (Θεοδώρα - Άδεια Λειτουργίας), Καθαρίστρια (Olta), Υποδοχή (Λαμπρινή) και Πρακτική ΕΠΑΣ (Μαρία)."
+            help="Συμπεριλαμβάνει στη συνολική μισθοδοσία το προσωπικό υπεύθυνης άδειας λειτουργίας, καθαριότητας, υποδοχής και πρακτικής άσκησης."
         )
         use_rolling_schedule = st.checkbox(
             "Κληρονόμηση προηγούμενου προγράμματος (Rolling Schedule)",
@@ -1271,17 +1004,6 @@ with st.sidebar:
 
 # --- 7. ΚΑΤΑΛΟΓΟΣ & ΕΠΕΞΕΡΓΑΣΙΑ ΠΟΛΛΑΠΛΩΝ CSV ---
 def seed_initial_catalog():
-    staff_data = [
-        {"staff_name": "Κατερίνα Π.", "hourly_cost": 8.63, "weekly_hours_declared": 40.0},
-        {"staff_name": "Κατερίνα", "hourly_cost": 7.84, "weekly_hours_declared": 40.0},
-        {"staff_name": "Δόμνα", "hourly_cost": 7.42, "weekly_hours_declared": 40.0},
-        {"staff_name": "Αντιγόνη", "hourly_cost": 7.64, "weekly_hours_declared": 21.0},
-        {"staff_name": "Νάνσυ", "hourly_cost": 8.78, "weekly_hours_declared": 40.0},
-        {"staff_name": "Άννα", "hourly_cost": 7.98, "weekly_hours_declared": 32.0},
-        {"staff_name": "Μιχριμπάν", "hourly_cost": 8.03, "weekly_hours_declared": 30.0},
-        {"staff_name": "Νάντια", "hourly_cost": 0.00, "weekly_hours_declared": 14.0},
-        {"staff_name": "Δημήτρης", "hourly_cost": 0.00, "weekly_hours_declared": 64.5}
-    ]
     services_data = [
         {"service_name": "Μανικιούρ χωρίς βαφή", "category": "Μανικιούρ", "base_duration": 20, "gross_price": 9.0, "material_cost_estimate": 0.60, "price_variants_json": "[]"},
         {"service_name": "Λιμάρισμα & Βάψιμο με Χρώμα Διαρκείας", "category": "Μανικιούρ", "base_duration": 20, "gross_price": 7.0, "material_cost_estimate": 0.60, "price_variants_json": "[]"},
@@ -1313,11 +1035,9 @@ def seed_initial_catalog():
         {"service_name": "Brow Lamination", "category": "Βλεφαρίδες/Φρύδια", "base_duration": 45, "gross_price": 28.0, "material_cost_estimate": 3.20, "price_variants_json": "[]"},
         {"service_name": "Lash Lift", "category": "Βλεφαρίδες/Φρύδια", "base_duration": 45, "gross_price": 25.0, "material_cost_estimate": 3.00, "price_variants_json": "[]"},
         {"service_name": "Lash Lift & Tint", "category": "Βλεφαρίδες/Φρύδια", "base_duration": 60, "gross_price": 30.0, "material_cost_estimate": 3.50, "price_variants_json": "[]"},
-        {"service_name": "WEEK_DEFAULT", "category": "__SHIFT_SCHEDULE__", "base_duration": 0, "gross_price": 0.0, "material_cost_estimate": 0.0, "price_variants_json": json.dumps(DEFAULT_SCREENSHOT_SCHEDULE, ensure_ascii=False)}
+        {"service_name": "WEEK_DEFAULT", "category": "__SHIFT_SCHEDULE__", "base_duration": 0, "gross_price": 0.0, "material_cost_estimate": 0.0, "price_variants_json": "[]"}
     ]
-    supabase.table("config_staff").upsert(staff_data).execute()
     supabase.table("config_services").upsert(services_data).execute()
-    save_app_config_json("__PAYROLL_PROFILES__", DEFAULT_PAYROLL_LEDGER)
 
 
 def process_and_calculate_bookings(df_raw, df_services, df_staff, df_existing_bookings):
@@ -3080,7 +2800,7 @@ with tab_staff:
             pm3.metric(
                 "3. Προσωπικό Άδειας / Υποστήριξης",
                 f"{support_payroll_cost:,.2f} €",
-                "Θεοδώρα / Καθαριότητα / Υποδοχή / ΕΠΑΣ",
+                "Άδεια / Καθαριότητα / Υποδοχή / Πρακτική",
                 delta_color="off",
                 border=True
             )
@@ -3417,7 +3137,7 @@ with tab_services:
                                     "order_date": now_dt.strftime("%Y-%m-%d %H:%M:%S"),
                                     "appointment_date": end_d.strftime("%Y-%m-%d"),
                                     "appointment_time": now_dt.strftime("%H:%M:%S"),
-                                    "staff_name": "Δημήτρης", "customer_name": "ΠΕΛΑΤΗΣ ΛΙΑΝΙΚΗΣ",
+                                    "staff_name": "Reception / Ταμείο", "customer_name": "ΠΕΛΑΤΗΣ ΛΙΑΝΙΚΗΣ",
                                     "raw_service": sel_prod_name, "clean_category": "Προϊόντα Λιανικής",
                                     "duration_minutes": 0, "gross_price": u_price, "vat_amount": u_vat,
                                     "net_revenue": u_net, "commission_pct": 0.0, "commission_fee": 0.0,
@@ -3652,7 +3372,7 @@ with tab_admin:
                               "monday_date": "YYYY-MM-DD",
                               "schedule": [
                                 {
-                                  "staff_name": "Νάντια",
+                                  "staff_name": "Ονοματεπώνυμο",
                                   "Δευτέρα": "18:00 - 20:30",
                                   "Τρίτη": "",
                                   "Τετάρτη": "17:30 - 20:30",
@@ -3937,9 +3657,8 @@ with tab_admin:
                     st.toast("✅ Το μητρώο μισθοδοσίας και τα ωρομίσθια αποθηκεύτηκαν επιτυχώς στη βάση!", icon=":material/check_circle:")
                     refresh_data()
             with c_btn_p2:
-                if st.button("🔄 Επαναφορά στα Επίσημα Εκκαθαριστικά Λογιστή", width="stretch", key="btn_reset_payroll_prof"):
-                    save_payroll_profiles_df(pd.DataFrame(DEFAULT_PAYROLL_LEDGER), auto_recalc_rates=False)
-                    st.toast("Επαναφέρθηκαν τα επίσημα στοιχεία των μισθοδοτικών καταστάσεων!", icon=":material/restore:")
+                if st.button("🔄 Ανανέωση από τη Βάση Δεδομένων", width="stretch", key="btn_reset_payroll_prof"):
+                    st.toast("Ανανεώθηκαν τα δεδομένα μισθοδοσίας από τη βάση!", icon=":material/refresh:")
                     refresh_data()
 
         st.space("small")
