@@ -317,19 +317,245 @@ def load_app_config_json(config_key: str):
     except Exception:
         return None
 
-# --- 4. ΕΞΥΠΝΟΣ ΚΛΗΤΗΡΑΣ GEMINI ΜΕ ΑΥΤΟΜΑΤΟ FALLBACK ΜΟΝΤΕΛΩΝ ---
-def call_gemini_smart(api_key, contents, expect_json=False, preferred_model="gemini-2.5-flash"):
-    client = genai.Client(api_key=api_key)
-    candidate_models = [
-        preferred_model,
+# --- 4. ΠΟΛΥ-ΠΑΡΟΧΟΣ ΚΛΗΤΗΡΑΣ AI (GEMINI PRO/FLASH, OPENAI CHATGPT, ANTHROPIC CLAUDE) ---
+import base64
+import urllib.request
+import urllib.error
+
+DEFAULT_MODELS_BY_PROVIDER = {
+    "Google Gemini": [
+        "gemini-2.5-pro",
+        "gemini-3.1-pro-preview",
+        "gemini-pro-latest",
         "gemini-2.5-flash",
         "gemini-3.0-flash",
         "gemini-3-flash-preview",
-        "gemini-flash-latest",
-        "gemini-2.0-flash"
+        "gemini-flash-latest"
+    ],
+    "OpenAI (ChatGPT)": [
+        "gpt-5",
+        "o3",
+        "gpt-4.1",
+        "gpt-4o",
+        "o4-mini",
+        "gpt-4o-mini"
+    ],
+    "Anthropic (Claude)": [
+        "claude-sonnet-4-6",
+        "claude-opus-4-6",
+        "claude-3-7-sonnet-latest",
+        "claude-3-5-sonnet-latest"
+    ]
+}
+
+def detect_ai_provider(api_key: str, model_name: str, explicit_provider: str = "") -> str:
+    m_low = str(model_name or "").strip().lower()
+    k_str = str(api_key or "").strip()
+    if m_low.startswith("claude-"):
+        return "Anthropic (Claude)"
+    if m_low.startswith(("gpt-", "o1", "o3", "o4", "chatgpt")):
+        return "OpenAI (ChatGPT)"
+    if m_low.startswith("gemini"):
+        return "Google Gemini"
+    if k_str.startswith("sk-ant-"):
+        return "Anthropic (Claude)"
+    if k_str.startswith("sk-"):
+        return "OpenAI (ChatGPT)"
+    if explicit_provider in DEFAULT_MODELS_BY_PROVIDER:
+        return explicit_provider
+    return "Google Gemini"
+
+def fetch_live_models_from_api(api_key: str, provider_name: str) -> list:
+    """Ρωτάει ζωντανά το API του παρόχου και επιστρέφει όλα τα ενεργά μοντέλα που υποστηρίζει το κλειδί."""
+    clean_k = str(api_key or "").strip()
+    if not clean_k:
+        return []
+    discovered = []
+    try:
+        if provider_name == "OpenAI (ChatGPT)" or clean_k.startswith("sk-") and not clean_k.startswith("sk-ant-"):
+            req = urllib.request.Request(
+                "https://api.openai.com/v1/models",
+                headers={"Authorization": f"Bearer {clean_k}", "User-Agent": "NailSalon-CFO"},
+                method="GET"
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                for item in data.get("data", []):
+                    mid = str(item.get("id", ""))
+                    if any(mid.startswith(p) for p in ("gpt-", "o1", "o3", "o4", "chatgpt")) and not any(x in mid for x in ("audio", "realtime", "tts", "whisper", "transcribe", "embedding", "instruct", "search")):
+                        discovered.append(mid)
+            discovered.sort(reverse=True)
+        elif provider_name == "Anthropic (Claude)" or clean_k.startswith("sk-ant-"):
+            req = urllib.request.Request(
+                "https://api.anthropic.com/v1/models",
+                headers={
+                    "x-api-key": clean_k,
+                    "anthropic-version": "2023-06-01",
+                    "User-Agent": "NailSalon-CFO"
+                },
+                method="GET"
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                for item in data.get("data", []):
+                    mid = str(item.get("id", ""))
+                    if mid:
+                        discovered.append(mid)
+        else:
+            if GENAI_AVAILABLE:
+                client = genai.Client(api_key=clean_k)
+                for m in client.models.list():
+                    m_id = getattr(m, "name", "").replace("models/", "")
+                    if "gemini" in m_id and "embedding" not in m_id and "imagen" not in m_id and "veo" not in m_id:
+                        discovered.append(m_id)
+                # Προτεραιότητα στα pro μοντέλα
+                discovered.sort(key=lambda x: (0 if "2.5-pro" in x else (1 if "pro" in x else 2), x))
+    except Exception:
+        pass
+    return discovered
+
+def _extract_multimodal_parts(contents):
+    """Μετατρέπει το contents σε (text_prompt, image_bytes, mime_type) αν περιέχει εικόνα."""
+    if isinstance(contents, str):
+        return contents, None, None
+    text_parts = []
+    img_bytes = None
+    mime_t = "image/png"
+    if isinstance(contents, (list, tuple)):
+        for item in contents:
+            if isinstance(item, str):
+                text_parts.append(item)
+            elif hasattr(item, "inline_data") and getattr(item, "inline_data", None) is not None:
+                inl = item.inline_data
+                img_bytes = getattr(inl, "data", None)
+                mime_t = getattr(inl, "mime_type", "image/png") or "image/png"
+            elif isinstance(item, dict) and "data" in item:
+                img_bytes = item["data"]
+                mime_t = item.get("mime_type", "image/png")
+    return "\n".join(text_parts), img_bytes, mime_t
+
+def call_gemini_smart(api_key, contents, expect_json=False, preferred_model="gemini-2.5-pro", provider="auto"):
+    """
+    Κεντρικός δρομολογητής AI CFO:
+    Υποστηρίζει Google Gemini (Pro & Flash), OpenAI ChatGPT (gpt-5, o3, gpt-4.1, gpt-4o) και Anthropic Claude (Sonnet/Opus),
+    καθώς και οποιοδήποτε μελλοντικό/custom μοντέλο.
+    """
+    prov = detect_ai_provider(api_key, preferred_model, provider)
+
+    # 1. OpenAI (ChatGPT)
+    if prov == "OpenAI (ChatGPT)":
+        text_prompt, img_bytes, mime_t = _extract_multimodal_parts(contents)
+        candidate_models = [preferred_model, "gpt-4o", "gpt-4.1", "gpt-4o-mini"]
+        seen = set()
+        ordered_models = [m for m in candidate_models if m and not (m in seen or seen.add(m))]
+        last_err = None
+        for m_name in ordered_models:
+            try:
+                if img_bytes:
+                    b64_img = base64.b64encode(img_bytes).decode("ascii")
+                    user_content = [
+                        {"type": "text", "text": text_prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:{mime_t};base64,{b64_img}"}}
+                    ]
+                else:
+                    user_content = text_prompt
+
+                payload = {
+                    "model": m_name,
+                    "messages": [
+                        {"role": "system", "content": "Είσαι ο Senior CFO του Nail Salon. Απαντάς πάντα με απόλυτη μαθηματική ακρίβεια στα Ελληνικά."},
+                        {"role": "user", "content": user_content}
+                    ]
+                }
+                if expect_json and not img_bytes and not m_name.startswith(("o1", "o3")):
+                    # Αν το prompt ζητάει JSON λίστα ή αντικείμενο, προσθέτουμε σαφή οδηγία
+                    payload["messages"][0]["content"] += " Επέστρεψε αποκλειστικά έγκυρο JSON χωρίς markdown backticks."
+
+                req = urllib.request.Request(
+                    "https://api.openai.com/v1/chat/completions",
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={
+                        "Authorization": f"Bearer {api_key.strip()}",
+                        "Content-Type": "application/json",
+                        "User-Agent": "NailSalon-CFO"
+                    },
+                    method="POST"
+                )
+                with urllib.request.urlopen(req, timeout=90) as resp:
+                    res_data = json.loads(resp.read().decode("utf-8"))
+                    return res_data["choices"][0]["message"]["content"], m_name
+            except urllib.error.HTTPError as e:
+                err_body = e.read().decode("utf-8", errors="ignore")
+                last_err = RuntimeError(f"OpenAI HTTP {e.code} ({m_name}): {err_body}")
+                if e.code in (404, 400) and "model" in err_body.lower():
+                    continue
+                raise last_err
+            except Exception as e:
+                last_err = e
+                raise e
+        raise last_err
+
+    # 2. Anthropic (Claude)
+    if prov == "Anthropic (Claude)":
+        text_prompt, img_bytes, mime_t = _extract_multimodal_parts(contents)
+        candidate_models = [preferred_model, "claude-sonnet-4-6", "claude-3-7-sonnet-latest", "claude-3-5-sonnet-latest"]
+        seen = set()
+        ordered_models = [m for m in candidate_models if m and not (m in seen or seen.add(m))]
+        last_err = None
+        for m_name in ordered_models:
+            try:
+                if img_bytes:
+                    b64_img = base64.b64encode(img_bytes).decode("ascii")
+                    user_content = [
+                        {"type": "image", "source": {"type": "base64", "media_type": mime_t, "data": b64_img}},
+                        {"type": "text", "text": text_prompt}
+                    ]
+                else:
+                    user_content = text_prompt
+
+                payload = {
+                    "model": m_name,
+                    "max_tokens": 4096,
+                    "messages": [{"role": "user", "content": user_content}]
+                }
+                req = urllib.request.Request(
+                    "https://api.anthropic.com/v1/messages",
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={
+                        "x-api-key": api_key.strip(),
+                        "anthropic-version": "2023-06-01",
+                        "Content-Type": "application/json",
+                        "User-Agent": "NailSalon-CFO"
+                    },
+                    method="POST"
+                )
+                with urllib.request.urlopen(req, timeout=90) as resp:
+                    res_data = json.loads(resp.read().decode("utf-8"))
+                    return res_data["content"][0]["text"], m_name
+            except urllib.error.HTTPError as e:
+                err_body = e.read().decode("utf-8", errors="ignore")
+                last_err = RuntimeError(f"Anthropic HTTP {e.code} ({m_name}): {err_body}")
+                if e.code in (404, 400) and "model" in err_body.lower():
+                    continue
+                raise last_err
+            except Exception as e:
+                last_err = e
+                raise e
+        raise last_err
+
+    # 3. Google Gemini (Pro & Flash με έξυπνο fallback αν υπάρξει 404 ή Free-Tier Quota 429 σε συγκεκριμένο μοντέλο)
+    client = genai.Client(api_key=api_key)
+    candidate_models = [
+        preferred_model,
+        "gemini-2.5-pro",
+        "gemini-pro-latest",
+        "gemini-2.5-flash",
+        "gemini-3.0-flash",
+        "gemini-3-flash-preview",
+        "gemini-flash-latest"
     ]
     seen = set()
-    ordered_models = [m for m in candidate_models if not (m in seen or seen.add(m))]
+    ordered_models = [m for m in candidate_models if m and not (m in seen or seen.add(m))]
 
     cfg = types.GenerateContentConfig(response_mime_type="application/json") if expect_json else None
     last_err = None
@@ -341,7 +567,7 @@ def call_gemini_smart(api_key, contents, expect_json=False, preferred_model="gem
         except Exception as e:
             last_err = e
             err_str = str(e)
-            if "404" in err_str or "NOT_FOUND" in err_str or "no longer available" in err_str:
+            if any(tok in err_str for tok in ("404", "NOT_FOUND", "no longer available", "429", "RESOURCE_EXHAUSTED", "quota")):
                 continue
             else:
                 raise e
@@ -349,7 +575,7 @@ def call_gemini_smart(api_key, contents, expect_json=False, preferred_model="gem
     try:
         for m in client.models.list():
             m_id = getattr(m, "name", "").replace("models/", "")
-            if "gemini" in m_id and ("flash" in m_id or "pro" in m_id) and "embedding" not in m_id:
+            if "gemini" in m_id and ("pro" in m_id or "flash" in m_id) and "embedding" not in m_id:
                 try:
                     resp = client.models.generate_content(model=m_id, contents=contents, config=cfg)
                     return resp.text, m_id
@@ -526,8 +752,10 @@ history_span_days = (full_cycle_end_d - full_cycle_start_d).days + 1
 # Εφόσον στη βάση υπάρχει ιστορικό >= 75 ημερών (τώρα έχουμε 2,5 έτη / 17.938 ραντεβού), η προεπιλογή είναι 100%!
 default_tw_real_new_pct = 100 if history_span_days >= 75 else 35
 
-# Ανάκτηση αποθηκευμένου Gemini API Key αποκλειστικά από τα κρυπτογραφημένα Secrets (χωρίς έκθεση στον browser)
+# Ανάκτηση αποθηκευμένων API Keys αποκλειστικά από τα κρυπτογραφημένα Secrets (χωρίς έκθεση στον browser)
 secret_gemini_key = get_secret_safe("GEMINI_API_KEY", "gemini_api_key")
+secret_openai_key = get_secret_safe("OPENAI_API_KEY", "openai_api_key")
+secret_anthropic_key = get_secret_safe("ANTHROPIC_API_KEY", "anthropic_api_key")
 
 # --- 6. ΠΛΑΪΝΗ ΜΠΑΡΑ (SIDEBAR) ΓΙΑ ΠΑΡΑΜΕΤΡΟΥΣ ΦΠΑ / TREATWELL / AI ---
 with st.sidebar:
@@ -559,9 +787,21 @@ with st.sidebar:
         )
 
     with st.container(border=True):
-        st.markdown("**Gemini AI (Ασφαλής Σύνδεση)**")
-        if secret_gemini_key:
-            st.caption("🔒 **Το Gemini API Key είναι κλειδωμένο στα Secrets** (δεν αποστέλλεται στον browser).")
+        st.markdown("**Πάροχος & Μοντέλο AI CFO**")
+        ai_provider_choice = st.selectbox(
+            "Πάροχος AI",
+            options=["Google Gemini", "OpenAI (ChatGPT)", "Anthropic (Claude)"],
+            index=0,
+            key="ai_provider_select"
+        )
+
+        active_secret_key = (
+            secret_gemini_key if ai_provider_choice == "Google Gemini"
+            else (secret_openai_key if ai_provider_choice == "OpenAI (ChatGPT)" else secret_anthropic_key)
+        )
+
+        if active_secret_key:
+            st.caption(f"🔒 **Το API Key ({ai_provider_choice}) είναι κλειδωμένο στα Secrets**.")
             override_gemini_key = st.text_input(
                 "Προσωρινό άλλο API Key (προαιρετικό)",
                 value="",
@@ -569,22 +809,55 @@ with st.sidebar:
                 placeholder="Κλειδωμένο στα Secrets",
                 help="Το βασικό σας κλειδί διαβάζεται με ασφάλεια από τα Secrets και δεν εμφανίζεται ποτέ στο 'ματάκι' του browser."
             )
-            gemini_api_key = override_gemini_key.strip() if override_gemini_key.strip() else secret_gemini_key
+            gemini_api_key = override_gemini_key.strip() if override_gemini_key.strip() else active_secret_key
         else:
             gemini_api_key = st.text_input(
-                "Gemini API Key",
+                f"API Key ({ai_provider_choice})",
                 value="",
                 type="password",
-                help="Ορίστε το GEMINI_API_KEY στα Secrets του Streamlit Cloud ή εισάγετέ το εδώ."
+                help="Ορίστε το GEMINI_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY στα Secrets του Streamlit Cloud ή εισάγετέ το εδώ."
             )
-            if gemini_api_key:
+            if gemini_api_key and ai_provider_choice == "Google Gemini":
                 save_gemini_key_persistent(gemini_api_key)
 
-        selected_gemini_model = st.selectbox(
-            "Μοντέλο AI",
-            options=["gemini-2.5-flash", "gemini-3.0-flash", "gemini-3-flash-preview", "gemini-flash-latest"],
-            index=0
+        if "live_models_by_prov" not in st.session_state:
+            st.session_state["live_models_by_prov"] = {}
+
+        if st.button("🔄 Ζωντανή Φόρτωση Μοντέλων από API", width="stretch", key="btn_fetch_live_models"):
+            if not gemini_api_key:
+                st.warning("Εισάγετε πρώτα API Key για να ανακτηθούν τα μοντέλα.")
+            else:
+                fetched_list = fetch_live_models_from_api(gemini_api_key, ai_provider_choice)
+                if fetched_list:
+                    st.session_state["live_models_by_prov"][ai_provider_choice] = fetched_list
+                    st.toast(f"Βρέθηκαν {len(fetched_list)} ενεργά μοντέλα στο API!", icon=":material/check_circle:")
+                else:
+                    st.warning("Δεν βρέθηκαν επιπλέον μοντέλα ή το κλειδί δεν επέστρεψε λίστα.")
+
+        base_models = DEFAULT_MODELS_BY_PROVIDER.get(ai_provider_choice, ["gemini-2.5-pro"])
+        live_models = st.session_state["live_models_by_prov"].get(ai_provider_choice, [])
+        merged_models = []
+        for m_item in (base_models + live_models):
+            if m_item not in merged_models:
+                merged_models.append(m_item)
+        CUSTOM_MODEL_OPT = "✍️ Άλλο / Χειροκίνητο Όνομα Μοντέλου..."
+        merged_models.append(CUSTOM_MODEL_OPT)
+
+        chosen_model_opt = st.selectbox(
+            "Μοντέλο AI (Προεπιλογή: Κορυφαίο Pro/Reasoning)",
+            options=merged_models,
+            index=0,
+            help="Επιλέξτε από τη λίστα, πατήστε 'Ζωντανή Φόρτωση' για να δείτε όλα τα νέα μοντέλα του API, ή επιλέξτε 'Άλλο' για να γράψετε οποιοδήποτε όνομα μοντέλου!"
         )
+        if chosen_model_opt == CUSTOM_MODEL_OPT:
+            custom_m_typed = st.text_input(
+                "Πληκτρολογήστε το ακριβές ID μοντέλου",
+                value=base_models[0],
+                placeholder="π.χ. gemini-2.5-pro, o3, gpt-5, claude-sonnet-4-6"
+            )
+            selected_gemini_model = custom_m_typed.strip() or base_models[0]
+        else:
+            selected_gemini_model = chosen_model_opt
 
     if st.button("Ανανέωση Δεδομένων Βάσης", icon=":material/refresh:", width="stretch"):
         refresh_data()
@@ -1769,9 +2042,9 @@ with tab_cfo:
         cache_key_period = f"{start_d}_{end_d}_{completed_count}_{round(true_net_profit, 0)}"
         if ai_btn_clicked:
             if not gemini_api_key:
-                st.error("Συμπληρώστε πρώτα το Gemini API Key στην Πλαϊνή Μπάρα (αριστερά)! Θα αποθηκευτεί μόνιμα.")
-            elif GENAI_AVAILABLE:
-                with st.spinner(f"Ο AI CFO συνδυάζει βάρδιες, υπηρεσίες και τεχνίτριες για την περίοδο {period_label}..."):
+                st.error(f"Συμπληρώστε πρώτα το API Key ({ai_provider_choice}) στην Πλαϊνή Μπάρα (αριστερά)!")
+            elif GENAI_AVAILABLE or ai_provider_choice != "Google Gemini":
+                with st.spinner(f"Ο AI CFO ({selected_gemini_model}) συνδυάζει βάρδιες, υπηρεσίες και τεχνίτριες για την περίοδο {period_label}..."):
                     try:
                         ai_summary_payload = {
                             "period": period_label,
@@ -2563,9 +2836,9 @@ with tab_sim:
 
             if st.button("🚀 Εκτέλεση Νέου Βαθέως Οικονομικού Ελέγχου (AI CFO)", type="primary", icon=":material/auto_awesome:"):
                 if not gemini_api_key:
-                    st.error("Συμπληρώστε πρώτα το Gemini API Key στην Πλαϊνή Μπάρα (αριστερά)!")
-                elif GENAI_AVAILABLE:
-                    with st.spinner("Ο Virtual CFO αναλύει τα οικονομικά δεδομένα της περιόδου και αποθηκεύει την έκθεση στη βάση..."):
+                    st.error(f"Συμπληρώστε πρώτα το API Key ({ai_provider_choice}) στην Πλαϊνή Μπάρα (αριστερά)!")
+                elif GENAI_AVAILABLE or ai_provider_choice != "Google Gemini":
+                    with st.spinner(f"Ο Virtual CFO ({selected_gemini_model}) αναλύει τα οικονομικά δεδομένα της περιόδου και αποθηκεύει την έκθεση στη βάση..."):
                         try:
                             ai_payload = {
                                 "period": period_label,
@@ -2597,7 +2870,8 @@ with tab_sim:
                                 api_key=gemini_api_key,
                                 contents=prompt_cfo,
                                 expect_json=False,
-                                preferred_model=selected_gemini_model
+                                preferred_model=selected_gemini_model,
+                                provider=ai_provider_choice
                             )
                             audit_obj = {
                                 "period": period_label,
@@ -2609,7 +2883,7 @@ with tab_sim:
                             save_app_config_json("__LAST_DEEP_AUDIT__", audit_obj)
                             st.toast("Η έκθεση Deep Audit αποθηκεύτηκε μόνιμα στη βάση!", icon=":material/check_circle:")
                         except Exception as e:
-                            st.error(f"Σφάλμα Gemini API: {e}")
+                            st.error(f"Σφάλμα AI API: {e}")
 
             active_audit = st.session_state.get("last_deep_audit")
             if isinstance(active_audit, dict) and active_audit.get("report_md"):
@@ -2689,8 +2963,8 @@ with tab_admin:
                 if sched_img_files:
                     if st.button(f"🚀 Μαζική Ανάγνωση & Αποθήκευση ({len(sched_img_files)} Screenshots)", type="primary", icon=":material/auto_awesome:", width="stretch"):
                         if not gemini_api_key:
-                            st.error("Συμπληρώστε πρώτα το Gemini API Key στην Πλαϊνή Μπάρα (Sidebar)!")
-                        elif not GENAI_AVAILABLE:
+                            st.error(f"Συμπληρώστε πρώτα το API Key ({ai_provider_choice}) στην Πλαϊνή Μπάρα (Sidebar)!")
+                        elif not GENAI_AVAILABLE and ai_provider_choice == "Google Gemini":
                             st.error("Δεν βρέθηκε η βιβλιοθήκη google-genai.")
                         else:
                             prog_bar = st.progress(0.0, text="Έναρξη ανάγνωσης screenshots...")
@@ -2724,11 +2998,13 @@ with tab_admin:
                                 try:
                                     img_bytes = img_f.getvalue()
                                     mime_t = img_f.type or "image/png"
+                                    img_part = types.Part.from_bytes(data=img_bytes, mime_type=mime_t) if (GENAI_AVAILABLE and ai_provider_choice == "Google Gemini") else {"data": img_bytes, "mime_type": mime_t}
                                     raw_txt, used_m = call_gemini_smart(
                                         api_key=gemini_api_key,
-                                        contents=[types.Part.from_bytes(data=img_bytes, mime_type=mime_t), prompt_vis],
+                                        contents=[img_part, prompt_vis],
                                         expect_json=True,
-                                        preferred_model=selected_gemini_model
+                                        preferred_model=selected_gemini_model,
+                                        provider=ai_provider_choice
                                     )
                                     parsed_json = clean_json_response(raw_txt)
                                     raw_mon = parsed_json.get("monday_date", "2026-10-19")
