@@ -18,3 +18,6 @@ uploads/
 treatwell_schedules*.json
 Προγραμμα/
 app_backup.py
+*.sql
+*.png
+Μισθοδοσιες/
