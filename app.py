@@ -168,11 +168,47 @@ def calc_schedule_tech_hours(rows_list):
         if isinstance(r, dict) and "δημ" not in str(r.get("staff_name", "")).lower()
     ), 2)
 
-# --- 3. ΣΥΝΔΕΣΗ SUPABASE, ΠΛΗΡΗΣ ΣΕΛΙΔΟΠΟΙΗΣΗ (PAGINATION) & SMART CACHING (1 ΩΡΑ) ---
+# --- 3. ΑΣΦΑΛΗΣ ΑΝΑΓΝΩΣΗ SECRETS, ΚΛΕΙΔΩΜΑ ΚΩΔΙΚΟΥ (APP_PASSWORD) & ΣΥΝΔΕΣΗ SUPABASE ---
+def get_secret_safe(primary_key: str, sub_key: str = "") -> str:
+    """Διαβάζει με ασφάλεια κλειδιά είτε από το root των Secrets είτε μέσα από την ενότητα [supabase]."""
+    try:
+        if primary_key in st.secrets:
+            val = st.secrets[primary_key]
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+        if "supabase" in st.secrets:
+            sup = st.secrets["supabase"]
+            if primary_key in sup and str(sup[primary_key]).strip():
+                return str(sup[primary_key]).strip()
+            if sub_key and sub_key in sup and str(sup[sub_key]).strip():
+                return str(sup[sub_key]).strip()
+    except Exception:
+        pass
+    return ""
+
+app_password_secret = get_secret_safe("APP_PASSWORD", "app_password")
+if app_password_secret and not st.session_state.get("app_authenticated", False):
+    _, col_auth, _ = st.columns([1, 1.3, 1])
+    with col_auth:
+        st.write("")
+        st.write("")
+        with st.container(border=True):
+            st.subheader("🔒 Κλειδωμένη Πρόσβαση — Nail Salon CFO")
+            st.caption("Εισάγετε τον Κωδικό Πρόσβασης της εφαρμογής για να προβάλετε τα οικονομικά δεδομένα.")
+            entered_pwd = st.text_input("Κωδικός Πρόσβασης", type="password", key="app_pwd_gate_input")
+            btn_login = st.button("Είσοδος στην Εφαρμογή", type="primary", icon=":material/lock_open:", width="stretch")
+            if btn_login or entered_pwd:
+                if entered_pwd == app_password_secret:
+                    st.session_state["app_authenticated"] = True
+                    st.rerun()
+                else:
+                    st.error("❌ Λάθος κωδικός πρόσβασης. Δοκιμάστε ξανά.")
+    st.stop()
+
 @st.cache_resource
 def init_connection():
-    url = st.secrets["SUPABASE_URL"]
-    key = st.secrets["SUPABASE_KEY"]
+    url = get_secret_safe("SUPABASE_URL", "url")
+    key = get_secret_safe("SUPABASE_KEY", "key")
     return create_client(url, key)
 
 try:
@@ -237,22 +273,12 @@ def refresh_data():
 
 def save_gemini_key_persistent(new_key: str):
     """
-    Αποθηκεύει το Gemini API Key:
-    1) Στον πίνακα config_services (category='__APP_CONFIG__') ώστε να μη χάνεται ποτέ στο Refresh (ακόμα και σε Cloud URL).
-    2) Στο τοπικό .streamlit/secrets.toml (αν τρέχει τοπικά), το οποίο προστατεύεται από το .gitignore.
+    Αποθηκεύει το Gemini API Key μόνο στο τοπικό .streamlit/secrets.toml (όταν τρέχει τοπικά).
+    Στο Cloud διαβάζεται απευθείας από τα κρυπτογραφημένα Streamlit Secrets χωρίς να εκτίθεται στη βάση ή στον browser.
     """
     clean_k = str(new_key or "").strip()
-    supabase.table("config_services").upsert([{
-        "service_name": "__GEMINI_API_KEY__",
-        "category": "__APP_CONFIG__",
-        "base_duration": 0,
-        "gross_price": 0.0,
-        "material_cost_estimate": 0.0,
-        "price_variants_json": clean_k
-    }]).execute()
-
     secrets_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".streamlit", "secrets.toml")
-    if os.path.exists(secrets_path):
+    if os.path.exists(secrets_path) and clean_k:
         try:
             with open(secrets_path, "r", encoding="utf-8") as f:
                 content = f.read()
@@ -500,8 +526,8 @@ history_span_days = (full_cycle_end_d - full_cycle_start_d).days + 1
 # Εφόσον στη βάση υπάρχει ιστορικό >= 75 ημερών (τώρα έχουμε 2,5 έτη / 17.938 ραντεβού), η προεπιλογή είναι 100%!
 default_tw_real_new_pct = 100 if history_span_days >= 75 else 35
 
-# Ανάκτηση αποθηκευμένου Gemini API Key (από st.secrets ή από τη Supabase __APP_CONFIG__)
-persisted_gemini_key = st.secrets.get("GEMINI_API_KEY", "") or db_app_settings.get("__GEMINI_API_KEY__", "")
+# Ανάκτηση αποθηκευμένου Gemini API Key αποκλειστικά από τα κρυπτογραφημένα Secrets (χωρίς έκθεση στον browser)
+secret_gemini_key = get_secret_safe("GEMINI_API_KEY", "gemini_api_key")
 
 # --- 6. ΠΛΑΪΝΗ ΜΠΑΡΑ (SIDEBAR) ΓΙΑ ΠΑΡΑΜΕΤΡΟΥΣ ΦΠΑ / TREATWELL / AI ---
 with st.sidebar:
@@ -533,17 +559,26 @@ with st.sidebar:
         )
 
     with st.container(border=True):
-        st.markdown("**Gemini AI (Μόνιμη Αποθήκευση)**")
-        gemini_api_key = st.text_input(
-            "Gemini API Key",
-            value=persisted_gemini_key,
-            type="password",
-            help="Αποθηκεύεται με ασφάλεια στη βάση σας (και τοπικά στο secrets.toml) ώστε να μη χάνεται ποτέ στο Refresh (F5)!"
-        )
-        if gemini_api_key != persisted_gemini_key:
-            save_gemini_key_persistent(gemini_api_key)
-            st.cache_data.clear()
-            st.toast("Το Gemini API Key αποθηκεύτηκε μόνιμα! Δεν θα ξαναχαθεί στο Refresh.", icon=":material/lock:")
+        st.markdown("**Gemini AI (Ασφαλής Σύνδεση)**")
+        if secret_gemini_key:
+            st.caption("🔒 **Το Gemini API Key είναι κλειδωμένο στα Secrets** (δεν αποστέλλεται στον browser).")
+            override_gemini_key = st.text_input(
+                "Προσωρινό άλλο API Key (προαιρετικό)",
+                value="",
+                type="password",
+                placeholder="Κλειδωμένο στα Secrets",
+                help="Το βασικό σας κλειδί διαβάζεται με ασφάλεια από τα Secrets και δεν εμφανίζεται ποτέ στο 'ματάκι' του browser."
+            )
+            gemini_api_key = override_gemini_key.strip() if override_gemini_key.strip() else secret_gemini_key
+        else:
+            gemini_api_key = st.text_input(
+                "Gemini API Key",
+                value="",
+                type="password",
+                help="Ορίστε το GEMINI_API_KEY στα Secrets του Streamlit Cloud ή εισάγετέ το εδώ."
+            )
+            if gemini_api_key:
+                save_gemini_key_persistent(gemini_api_key)
 
         selected_gemini_model = st.selectbox(
             "Μοντέλο AI",
@@ -553,6 +588,11 @@ with st.sidebar:
 
     if st.button("Ανανέωση Δεδομένων Βάσης", icon=":material/refresh:", width="stretch"):
         refresh_data()
+
+    if app_password_secret:
+        if st.button("Κλείδωμα Εφαρμογής (Logout)", icon=":material/lock:", width="stretch"):
+            st.session_state["app_authenticated"] = False
+            st.rerun()
 
 # --- 7. ΚΑΤΑΛΟΓΟΣ & ΕΠΕΞΕΡΓΑΣΙΑ ΠΟΛΛΑΠΛΩΝ CSV ---
 def seed_initial_catalog():
