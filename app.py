@@ -3298,6 +3298,662 @@ with tab_compare:
                     avail_cols_mo = [c for c in cols_to_show_mo if c in df_mo_all.columns]
                     st.dataframe(df_mo_all[avail_cols_mo], hide_index=True, width="stretch")
 
+
+# --- ΒΕΛΤΙΣΤΟΠΟΙΗΤΗΣ ΒΑΡΔΙΩΝ & ΟΠΤΙΚΟΣ ΕΝΤΟΠΙΣΜΟΣ IDLE TIME ---
+def render_daily_gantt_idle_detector(df_comp, db_schedules, staff_hourly_lookup, use_rolling_schedule):
+    with st.container(border=True):
+        st.subheader("🔬 Οπτικό Ημερήσιο Timeline Ραντεβού vs Βάρδιας (Daily Gantt & Ανίχνευση Κενών)", icon=":material/view_timeline:")
+        st.caption(
+            "Επιλέξτε οποιαδήποτε ημέρα της περιόδου για να δείτε ακριβώς πότε ξεκίνησε η βάρδια κάθε τεχνίτριας, "
+            "ποια ραντεβού εκτέλεσε, και **πού ακριβώς δημιουργήθηκαν τα κόκκινα κενά (νεκρές ώρες)** που κοστίζουν μισθοδοσία."
+        )
+
+        if df_comp.empty or "appointment_date" not in df_comp.columns:
+            st.info("Δεν υπάρχουν ραντεβού στην επιλεγμένη περίοδο.")
+            return
+
+        unique_dates = sorted(df_comp["appointment_date"].dropna().unique().tolist())
+        if not unique_dates:
+            st.info("Δεν βρέθηκαν διαθέσιμες ημερομηνίες.")
+            return
+
+        date_idle_stats = []
+        for d_str in unique_dates:
+            dt_obj = pd.to_datetime(d_str, errors="coerce")
+            if pd.isna(dt_obj):
+                continue
+            wd = dt_obj.weekday()
+            if wd > 5:
+                continue
+            day_name = DAYS_GR[wd]
+            mon_str = (dt_obj - timedelta(days=wd)).strftime("%Y-%m-%d")
+            wk_rows, _, _ = resolve_week_schedule_smart(mon_str, db_schedules, use_rolling_schedule)
+            day_sched_h = sum(
+                calc_shift_hours(r.get(day_name, ""))
+                for r in wk_rows
+                if str(r.get("staff_name", "")).strip().lower() != "νάντια"
+            )
+            day_booked_m = df_comp[df_comp["appointment_date"] == d_str]["duration_minutes"].sum()
+            day_booked_h = day_booked_m / 60.0
+            idle_h = max(0.0, day_sched_h - day_booked_h)
+            date_idle_stats.append({
+                "date_str": d_str,
+                "dt_obj": dt_obj,
+                "day_name": day_name,
+                "sched_h": day_sched_h,
+                "booked_h": day_booked_h,
+                "idle_h": idle_h,
+                "idle_cost": idle_h * 7.80
+            })
+
+        if not date_idle_stats:
+            st.info("Δεν βρέθηκαν εργάσιμες ημέρες.")
+            return
+
+        date_idle_stats.sort(key=lambda x: x["idle_h"], reverse=True)
+
+        date_options = [
+            f"{x['date_str']} ({x['day_name']}) — {x['idle_h']:.1f}h Idle (-{x['idle_cost']:.0f} €) 🔴"
+            if x["idle_h"] >= 4.0 else
+            f"{x['date_str']} ({x['day_name']}) — {x['idle_h']:.1f}h Idle (-{x['idle_cost']:.0f} €)"
+            for x in date_idle_stats
+        ]
+
+        c_sel1, c_sel2 = st.columns([2.5, 1.5], vertical_alignment="center")
+        with c_sel1:
+            chosen_label = st.selectbox(
+                "📅 Επιλέξτε Ημερομηνία για Ακτινογραφία Ραντεβού (Ταξινομημένες κατά Νεκρό Χρόνο)",
+                options=date_options,
+                index=0,
+                key="gantt_day_picker"
+            )
+        with c_sel2:
+            st.caption(
+                "💡 Προεπιλογή: **Η #1 ημέρα με το μεγαλύτερο Idle Time** στην περίοδο, ώστε να εντοπίζετε αμέσως τη μεγαλύτερη σπατάλη."
+            )
+
+        selected_idx = date_options.index(chosen_label)
+        day_info = date_idle_stats[selected_idx]
+        sel_date_str = day_info["date_str"]
+        sel_dt = day_info["dt_obj"]
+        sel_day_name = day_info["day_name"]
+        mon_str = (sel_dt - timedelta(days=sel_dt.weekday())).strftime("%Y-%m-%d")
+
+        wk_rows, is_exact, src_key = resolve_week_schedule_smart(mon_str, db_schedules, use_rolling_schedule)
+        wk_map = {str(r.get("staff_name", "")).strip().lower(): r for r in wk_rows}
+
+        df_day_appts = df_comp[df_comp["appointment_date"] == sel_date_str].copy()
+
+        active_techs_set = set()
+        for r in wk_rows:
+            t_name = str(r.get("staff_name", "")).strip()
+            if t_name and t_name.lower() != "νάντια" and calc_shift_hours(r.get(sel_day_name, "")) > 0:
+                active_techs_set.add(t_name)
+        for _, b_row in df_day_appts.iterrows():
+            stf = str(b_row.get("staff_name", "")).strip()
+            if stf and stf.lower() != "νάντια":
+                active_techs_set.add(stf)
+
+        if not active_techs_set:
+            st.warning(f"Δεν βρέθηκαν τεχνίτριες με βάρδια ή ραντεβού για την ημέρα {sel_date_str}.")
+            return
+
+        sorted_techs = sorted(list(active_techs_set))
+
+        timeline_data = []
+        total_day_shift_h = 0.0
+        total_day_prod_h = 0.0
+        total_day_idle_h = 0.0
+        gap_type_sums = {"morning": 0.0, "midday": 0.0, "evening": 0.0}
+
+        for t_name in sorted_techs:
+            t_low = t_name.lower()
+            hourly_rate = staff_hourly_lookup.get(t_low, 7.80)
+            shift_str = wk_map.get(t_low, {}).get(sel_day_name, "")
+            intervals = parse_shift_intervals(shift_str)
+
+            t_appts = df_day_appts[df_day_appts["staff_name"].str.strip().str.lower() == t_low].copy()
+            parsed_t_appts = []
+            for _, ar in t_appts.iterrows():
+                t_str = str(ar.get("appointment_time", "09:00:00"))
+                tp = t_str.split(":")
+                st_h = int(tp[0]) + (int(tp[1]) / 60.0 if len(tp) > 1 else 0.0)
+                dur_m = float(ar.get("duration_minutes", 45))
+                dur_h = max(0.25, dur_m / 60.0)
+                en_h = st_h + dur_h
+                parsed_t_appts.append({
+                    "start": st_h,
+                    "end": en_h,
+                    "dur_m": dur_m,
+                    "dur_h": dur_h,
+                    "service": str(ar.get("raw_service", "Υπηρεσία")),
+                    "category": str(ar.get("category", "Μανικιούρ")),
+                    "price": float(ar.get("gross_price", 0.0)),
+                    "order_id": str(ar.get("order_id", ""))
+                })
+            parsed_t_appts.sort(key=lambda x: x["start"])
+
+            if intervals:
+                shift_st = intervals[0][0]
+                shift_en = intervals[-1][1]
+                shift_dur = sum(en - st for st, en in intervals)
+            elif parsed_t_appts:
+                shift_st = max(8.5, parsed_t_appts[0]["start"] - 0.25)
+                shift_en = min(21.0, parsed_t_appts[-1]["end"] + 0.25)
+                shift_dur = shift_en - shift_st
+            else:
+                shift_st, shift_en, shift_dur = 9.0, 17.0, 8.0
+
+            total_day_shift_h += shift_dur
+            prod_dur = sum(a["dur_h"] for a in parsed_t_appts)
+            total_day_prod_h += prod_dur
+
+            tech_gaps = []
+            if not parsed_t_appts:
+                tech_gaps.append({
+                    "type": "Ολόκληρη η Βάρδια Κενή (0 Ραντεβού!)",
+                    "start": shift_st,
+                    "end": shift_en,
+                    "dur": shift_dur,
+                    "cost": shift_dur * hourly_rate
+                })
+                gap_type_sums["morning"] += shift_dur
+            else:
+                if parsed_t_appts[0]["start"] > shift_st + 0.20:
+                    g_dur = parsed_t_appts[0]["start"] - shift_st
+                    tech_gaps.append({
+                        "type": "🌅 Πρωινή Αναμονή Έναρξης",
+                        "start": shift_st,
+                        "end": parsed_t_appts[0]["start"],
+                        "dur": g_dur,
+                        "cost": g_dur * hourly_rate
+                    })
+                    gap_type_sums["morning"] += g_dur
+
+                for i in range(len(parsed_t_appts) - 1):
+                    p_end = parsed_t_appts[i]["end"]
+                    n_start = parsed_t_appts[i+1]["start"]
+                    if n_start > p_end + 0.20:
+                        g_dur = n_start - p_end
+                        tech_gaps.append({
+                            "type": "🥪 Ενδιάμεσο Κενό (Ελβετικό Τυρί)",
+                            "start": p_end,
+                            "end": n_start,
+                            "dur": g_dur,
+                            "cost": g_dur * hourly_rate
+                        })
+                        gap_type_sums["midday"] += g_dur
+
+                if parsed_t_appts[-1]["end"] < shift_en - 0.20:
+                    g_dur = shift_en - parsed_t_appts[-1]["end"]
+                    tech_gaps.append({
+                        "type": "🌇 Απογευματινή Αναμονή Λήξης",
+                        "start": parsed_t_appts[-1]["end"],
+                        "end": shift_en,
+                        "dur": g_dur,
+                        "cost": g_dur * hourly_rate
+                    })
+                    gap_type_sums["evening"] += g_dur
+
+            t_idle_h = sum(g["dur"] for g in tech_gaps)
+            total_day_idle_h += t_idle_h
+
+            timeline_data.append({
+                "tech_name": t_name,
+                "shift_st": shift_st,
+                "shift_en": shift_en,
+                "shift_dur": shift_dur,
+                "hourly_rate": hourly_rate,
+                "appts": parsed_t_appts,
+                "gaps": tech_gaps,
+                "idle_h": t_idle_h,
+                "idle_cost": t_idle_h * hourly_rate
+            })
+
+        day_cost_idle = total_day_idle_h * 7.80
+        day_occ_pct = (total_day_prod_h / max(0.1, total_day_shift_h)) * 100.0
+
+        dk1, dk2, dk3, dk4 = st.columns(4)
+        dk1.metric(
+            "1. Ώρες Βάρδιας (Κατάστημα)",
+            f"{total_day_shift_h:.1f} h",
+            f"{len(sorted_techs)} τεχνίτριες παρούσες",
+            delta_color="off",
+            border=True
+        )
+        dk2.metric(
+            "2. Παραγωγικές Ώρες Ραντεβού",
+            f"{total_day_prod_h:.1f} h",
+            f"{len(df_day_appts)} ραντεβού εκτελέστηκαν",
+            delta_color="off",
+            border=True
+        )
+        dk3.metric(
+            "3. Νεκρές Ώρες (Idle Time)",
+            f"{total_day_idle_h:.1f} h",
+            f"{100.0 - day_occ_pct:.1f}% της ημέρας χαμένο",
+            delta_color="inverse",
+            border=True
+        )
+        dk4.metric(
+            "4. Κόστος Νεκρού Χρόνου Σήμερα",
+            f"-{day_cost_idle:,.2f} €",
+            "Μισθοδοσία χωρίς παραγωγή",
+            delta_color="inverse",
+            border=True
+        )
+
+        fig_gantt = go.Figure()
+        cat_color_map = {
+            "Μανικιούρ": "#10b981",
+            "Πεντικιούρ": "#06b6d4",
+            "Πακέτο": "#8b5cf6",
+            "Βλεφαρίδες/Φρύδια": "#f59e0b",
+            "Τεχνητά / Επιμήκυνση": "#ec4899",
+            "Άγνωστη": "#64748b"
+        }
+
+        for item in timeline_data:
+            t_name = item["tech_name"]
+            st_h = item["shift_st"]
+            en_h = item["shift_en"]
+            fig_gantt.add_trace(go.Bar(
+                y=[t_name],
+                x=[en_h - st_h],
+                base=[st_h],
+                orientation="h",
+                marker=dict(color="#f1f5f9", line=dict(color="#cbd5e1", width=1.5)),
+                name="Προγραμματισμένη Βάρδια",
+                hoverinfo="text",
+                hovertext=f"<b>{t_name} — Βάρδια:</b> {int(st_h):02d}:{int(round((st_h%1)*60)):02d} – {int(en_h):02d}:{int(round((en_h%1)*60)):02d} ({en_h-st_h:.1f}h)",
+                showlegend=False
+            ))
+
+        seen_cats = set()
+        for item in timeline_data:
+            t_name = item["tech_name"]
+            for a in item["appts"]:
+                c_name = a["category"]
+                col = cat_color_map.get(c_name, "#10b981")
+                st_time_str = f"{int(a['start']):02d}:{int(round((a['start']%1)*60)):02d}"
+                en_time_str = f"{int(a['end']):02d}:{int(round((a['end']%1)*60)):02d}"
+                short_srv = (a["service"][:18] + "..") if len(a["service"]) > 20 else a["service"]
+                show_leg = c_name not in seen_cats
+                seen_cats.add(c_name)
+
+                fig_gantt.add_trace(go.Bar(
+                    y=[t_name],
+                    x=[a["dur_h"]],
+                    base=[a["start"]],
+                    orientation="h",
+                    marker=dict(color=col, line=dict(color="#ffffff", width=1)),
+                    name=f"💅 {c_name}",
+                    legendgroup=f"cat_{c_name}",
+                    showlegend=show_leg,
+                    hoverinfo="text",
+                    hovertext=(
+                        f"<b>{t_name}</b><br>"
+                        f"💅 <b>Υπηρεσία:</b> {a['service']}<br>"
+                        f"⏱️ <b>Ώρα:</b> {st_time_str} – {en_time_str} ({int(a['dur_m'])}\')<br>"
+                        f"💶 <b>Αξία:</b> {a['price']:.2f} €"
+                    ),
+                    text=f"{short_srv} ({int(a['dur_m'])}\')",
+                    textposition="inside",
+                    insidetextanchor="middle",
+                    textfont=dict(size=11, color="#ffffff")
+                ))
+
+        seen_gap_leg = False
+        for item in timeline_data:
+            t_name = item["tech_name"]
+            for g in item["gaps"]:
+                st_time_str = f"{int(g['start']):02d}:{int(round((g['start']%1)*60)):02d}"
+                en_time_str = f"{int(g['end']):02d}:{int(round((g['end']%1)*60)):02d}"
+                gap_mins = int(round(g["dur"] * 60))
+                fig_gantt.add_trace(go.Bar(
+                    y=[t_name],
+                    x=[g["dur"]],
+                    base=[g["start"]],
+                    orientation="h",
+                    marker=dict(
+                        color="rgba(239, 68, 68, 0.85)",
+                        pattern=dict(shape="/", fillmode="replace", bgcolor="rgba(239, 68, 68, 0.40)"),
+                        line=dict(color="#ef4444", width=1.5)
+                    ),
+                    name="🔴 Νεκρό Κενό (Idle)",
+                    legendgroup="idle_gap",
+                    showlegend=not seen_gap_leg,
+                    hoverinfo="text",
+                    hovertext=(
+                        f"<b>{t_name} — {g['type']}</b><br>"
+                        f"⏳ <b>Διάρκεια:</b> {gap_mins} λεπτά ({g['dur']:.2f}h)<br>"
+                        f"⏱️ <b>Ώρα:</b> {st_time_str} – {en_time_str}<br>"
+                        f"💸 <b>Κόστος Μισθοδοσίας:</b> -{g['cost']:.2f} €"
+                    ),
+                    text=f"❌ {gap_mins}\' κενό (-{g['cost']:.0f}€)" if gap_mins >= 35 else f"❌ {gap_mins}\'",
+                    textposition="inside",
+                    insidetextanchor="middle",
+                    textfont=dict(size=10, color="#ffffff")
+                ))
+                seen_gap_leg = True
+
+        chart_height = max(320, len(sorted_techs) * 65 + 90)
+        fig_gantt.update_layout(
+            barmode="overlay",
+            height=chart_height,
+            margin=dict(t=25, b=25, l=15, r=15),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            xaxis=dict(
+                title="Ώρα Ημέρας",
+                tickmode="linear",
+                tick0=8.0,
+                dtick=1.0,
+                tickformat="%d",
+                ticksuffix=":00",
+                range=[8.5, 21.5],
+                gridcolor="#e2e8f0"
+            ),
+            yaxis=dict(autorange="reversed", gridcolor="rgba(0,0,0,0)"),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
+        )
+        st.plotly_chart(fig_gantt, width="stretch")
+
+        tot_gaps_sum = max(0.1, sum(gap_type_sums.values()))
+        pct_morn = (gap_type_sums["morning"] / tot_gaps_sum) * 100.0
+        pct_mid = (gap_type_sums["midday"] / tot_gaps_sum) * 100.0
+        pct_eve = (gap_type_sums["evening"] / tot_gaps_sum) * 100.0
+
+        st.markdown("##### 💡 Αυτόματη Διάγνωση: Πού Χάθηκε ο Χρόνος Σήμερα;")
+        dc1, dc2, dc3 = st.columns(3, gap="medium")
+        with dc1:
+            st.info(
+                f"**🌅 1. Πρωινή Αναμονή Έναρξης**\n\n"
+                f"• **{gap_type_sums['morning']:.1f} ώρες** ({pct_morn:.0f}% του νεκρού χρόνου)\n\n"
+                f"👉 *Αιτία: Τεχνίτριες ήρθαν νωρίς αλλά τα πρώτα ραντεβού ξεκίνησαν αργότερα. Λύση: Μετατόπιση έναρξης βάρδιας (π.χ. 11:00 αντί για 09:30).*"
+            )
+        with dc2:
+            st.warning(
+                f"**🥪 2. Ενδιάμεσα Κενά («Ελβετικό Τυρί»)**\n\n"
+                f"• **{gap_type_sums['midday']:.1f} ώρες** ({pct_mid:.0f}% του νεκρού χρόνου)\n\n"
+                f"👉 *Αιτία: Μικρά κενά 30'–50' ανάμεσα στα ραντεβού. Λύση: Ενεργοποίηση back-to-back κανόνα στο Treatwell / γραμματεία.*"
+            )
+        with dc3:
+            st.error(
+                f"**🌇 3. Απογευματινή Αναμονή Λήξης**\n\n"
+                f"• **{gap_type_sums['evening']:.1f} ώρες** ({pct_eve:.0f}% του νεκρού χρόνου)\n\n"
+                f"👉 *Αιτία: Τελευταία ραντεβού ολοκληρώθηκαν νωρίτερα από το κλείσιμο. Λύση: Πρόωρη αποχώρηση ή προσφορά happy hour.*"
+            )
+
+
+def render_shift_rebalancing_sandbox(sched_cap_matrix, demand_matrix, active_staff_grid, avg_h_cost=7.80):
+    with st.container(border=True):
+        st.subheader("🎛️ Live What-If Προσομοιωτής Ανακατάταξης Βαρδιών (Smart Roster Sandbox)", icon=":material/tune:")
+        st.caption(
+            "Δοκιμάστε **άμεσα και χωρίς ρίσκο** πώς θα άλλαζε το εβδομαδιαίο και μηνιαίο σας κέρδος αν κάνατε ανακατανομή των βαρδιών! "
+            "Η προσομοίωση επανυπολογίζει σε πραγματικό χρόνο τις νέες νεκρές ώρες, την εξοικονόμηση μισθοδοσίας και τη νέα πληρότητα."
+        )
+
+        excess_matrix = sched_cap_matrix - demand_matrix
+        daily_excess_sum = [float(np.sum(np.maximum(0.0, excess_matrix[d, :]))) for d in range(6)]
+        daily_demand_sum = [float(np.sum(demand_matrix[d, :])) for d in range(6)]
+        daily_sched_sum = [float(np.sum(sched_cap_matrix[d, :])) for d in range(6)]
+
+        curr_tot_sched = sum(daily_sched_sum)
+        curr_tot_dem = sum(daily_demand_sum)
+        curr_tot_idle = sum(daily_excess_sum)
+        curr_idle_cost_wk = curr_tot_idle * avg_h_cost
+        curr_occ_pct = (curr_tot_dem / max(0.1, curr_tot_sched)) * 100.0
+
+        col_cfg1, col_cfg2, col_cfg3 = st.columns([1.5, 1.5, 1.5], gap="medium")
+
+        day_options = [
+            f"{d_name} (+{daily_excess_sum[idx]:.1f}h πλεόνασμα)" if daily_excess_sum[idx] >= 3.0 else f"{d_name} (+{daily_excess_sum[idx]:.1f}h)"
+            for idx, d_name in enumerate(DAYS_GR)
+        ]
+        max_excess_idx = int(np.argmax(daily_excess_sum))
+
+        with col_cfg1:
+            sel_target_day_lbl = st.selectbox(
+                "1. Ημέρα προς Προσαρμογή",
+                options=day_options,
+                index=max_excess_idx,
+                key="sandbox_day_picker"
+            )
+            sel_d_idx = day_options.index(sel_target_day_lbl)
+
+        with col_cfg2:
+            intervention_type = st.segmented_control(
+                "2. Τύπος Παρέμβασης",
+                options=[
+                    "🌅 Κλιμακωτή Έναρξη (+1-3h αργότερα)",
+                    "✂️ Μείωση Ωρών Βάρδιας",
+                    "🔄 Μεταφορά σε Ημέρα Αιχμής"
+                ],
+                default="🌅 Κλιμακωτή Έναρξη (+1-3h αργότερα)",
+                key="sandbox_intervention_type"
+            )
+
+        with col_cfg3:
+            if "Κλιμακωτή" in intervention_type:
+                hours_shifted = st.slider(
+                    "Ώρες μετατόπισης έναρξης το πρωί (09:00-12:00)",
+                    min_value=1.0, max_value=3.0, value=1.5, step=0.5,
+                    key="sb_sl_morning_shift"
+                )
+                realloc_target = None
+            elif "Μείωση" in intervention_type:
+                hours_shifted = st.slider(
+                    "Ώρες περικοπής πλεονάσματος",
+                    min_value=1.0, max_value=6.0, value=2.0, step=0.5,
+                    key="sb_sl_cut_hours"
+                )
+                realloc_target = None
+            else:
+                hours_shifted = st.slider(
+                    "Ώρες προς μεταφορά",
+                    min_value=1.0, max_value=5.0, value=2.0, step=0.5,
+                    key="sb_sl_realloc_hours"
+                )
+                realloc_target = st.selectbox(
+                    "Ημέρα Προορισμού",
+                    options=["Παρασκευή", "Σάββατο", "Πέμπτη"],
+                    index=0,
+                    key="sb_realloc_target_day"
+                )
+
+        sim_sched = sched_cap_matrix.copy()
+
+        if "Κλιμακωτή" in intervention_type:
+            rem_h = hours_shifted
+            for h_col in [0, 1, 2]:
+                if rem_h <= 0:
+                    break
+                cut_amt = min(rem_h, max(0.0, sim_sched[sel_d_idx, h_col] - demand_matrix[sel_d_idx, h_col]))
+                if cut_amt > 0:
+                    sim_sched[sel_d_idx, h_col] -= cut_amt
+                    rem_h -= cut_amt
+            if rem_h > 0:
+                sim_sched[sel_d_idx, 0] = max(0.0, sim_sched[sel_d_idx, 0] - rem_h)
+        elif "Μείωση" in intervention_type:
+            day_ex = sim_sched[sel_d_idx, :] - demand_matrix[sel_d_idx, :]
+            sorted_h = np.argsort(-day_ex)
+            rem_h = hours_shifted
+            for h_col in sorted_h:
+                if rem_h <= 0:
+                    break
+                cut_amt = min(rem_h, max(0.5, day_ex[h_col]))
+                sim_sched[sel_d_idx, h_col] = max(0.0, sim_sched[sel_d_idx, h_col] - cut_amt)
+                rem_h -= cut_amt
+        else:
+            day_ex = sim_sched[sel_d_idx, :] - demand_matrix[sel_d_idx, :]
+            sorted_h = np.argsort(-day_ex)
+            rem_h = hours_shifted
+            for h_col in sorted_h:
+                if rem_h <= 0:
+                    break
+                cut_amt = min(rem_h, max(0.5, day_ex[h_col]))
+                sim_sched[sel_d_idx, h_col] = max(0.0, sim_sched[sel_d_idx, h_col] - cut_amt)
+                rem_h -= cut_amt
+
+            tgt_idx = DAYS_GR.index(realloc_target) if realloc_target in DAYS_GR else 4
+            tgt_def = demand_matrix[tgt_idx, :] - sim_sched[tgt_idx, :]
+            sorted_tgt_h = np.argsort(-tgt_def)
+            add_h = hours_shifted
+            for h_col in sorted_tgt_h:
+                if add_h <= 0:
+                    break
+                sim_sched[tgt_idx, h_col] += min(1.0, add_h)
+                add_h -= min(1.0, add_h)
+
+        sim_excess = sim_sched - demand_matrix
+        sim_daily_idle = [float(np.sum(np.maximum(0.0, sim_excess[d, :]))) for d in range(6)]
+        sim_tot_idle = sum(sim_daily_idle)
+        sim_tot_sched = float(np.sum(sim_sched))
+        sim_idle_cost_wk = sim_tot_idle * avg_h_cost
+        saved_idle_h_wk = max(0.0, curr_tot_idle - sim_tot_idle)
+        saved_cost_wk = saved_idle_h_wk * avg_h_cost
+        saved_cost_month = saved_cost_wk * 4.33
+        sim_occ_pct = (curr_tot_dem / max(0.1, sim_tot_sched)) * 100.0
+
+        r1, r2, r3, r4 = st.columns(4)
+        r1.metric(
+            "1. Νέες Νεκρές Ώρες / Εβδομάδα",
+            f"{sim_tot_idle:.1f} h",
+            f"-{saved_idle_h_wk:.1f} h μείωση",
+            delta_color="normal",
+            border=True
+        )
+        r2.metric(
+            "2. Εβδομαδιαία Εξοικονόμηση",
+            f"+{saved_cost_wk:,.2f} € / εβδ.",
+            "Λιγότερη σπατάλη σε αδράνεια",
+            delta_color="normal",
+            border=True
+        )
+        r3.metric(
+            "3. Μηνιαίο Καθαρό Κέρδος στην Τσέπη",
+            f"+{saved_cost_month:,.2f} € / μήνα",
+            f"+{saved_cost_month*12:,.0f} € ετησίως",
+            delta_color="normal",
+            border=True
+        )
+        r4.metric(
+            "4. Νέα Πληρότητα Καταστήματος",
+            f"{sim_occ_pct:.1f}%",
+            f"{sim_occ_pct - curr_occ_pct:+.1f}% βελτίωση",
+            delta_color="normal",
+            border=True
+        )
+
+        fig_cmp = go.Figure()
+        fig_cmp.add_trace(go.Bar(
+            x=DAYS_GR,
+            y=[daily_excess_sum[d] * avg_h_cost for d in range(6)],
+            name="🔴 Τρέχον Κόστος Idle (€/ημέρα)",
+            marker_color="#ef4444",
+            text=[f"{daily_excess_sum[d]:.1f}h (-{daily_excess_sum[d]*avg_h_cost:.0f}€)" for d in range(6)],
+            textposition="inside"
+        ))
+        fig_cmp.add_trace(go.Bar(
+            x=DAYS_GR,
+            y=[sim_daily_idle[d] * avg_h_cost for d in range(6)],
+            name="🟢 Νέο Προσομοιωμένο Κόστος (€/ημέρα)",
+            marker_color="#10b981",
+            text=[f"{sim_daily_idle[d]:.1f}h (-{sim_daily_idle[d]*avg_h_cost:.0f}€)" for d in range(6)],
+            textposition="inside"
+        ))
+        fig_cmp.update_layout(
+            barmode="group",
+            height=280,
+            margin=dict(t=15, b=15, l=10, r=10),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            yaxis=dict(title="Κόστος Νεκρού Χρόνου (€)", ticksuffix=" €"),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
+        )
+        st.plotly_chart(fig_cmp, width="stretch")
+
+
+def render_ai_shift_rebalancer(sched_cap_matrix, demand_matrix, ov_blocks, un_blocks, avg_h_cost, selected_gemini_model, ai_provider_choice, selected_thinking_level, gemini_api_key):
+    with st.container(border=True):
+        st.subheader("🤖 AI Smart Rebalancer: Πλάνο Νέου Εβδομαδιαίου Προγράμματος (Gemini 3.8 Flash High Thinking)", icon=":material/psychology:")
+        st.caption(
+            "Το AI CFO αναλύει συνδυαστικά τα ακριβή δεδομένα ζήτησης ανά ώρα, εντοπίζει τις κόκκινες ζώνες υπερστελέχωσης "
+            "και συντάσσει **συγκεκριμένο νέο εβδομαδιαίο ωράριο ανά ημέρα & κανόνες κρατήσεων στο Treatwell**."
+        )
+
+        if "last_roster_plan" not in st.session_state:
+            saved_plan = load_app_config_json("__LAST_ROSTER_REBALANCER_AI__")
+            st.session_state["last_roster_plan"] = saved_plan if isinstance(saved_plan, dict) else None
+
+        if st.button("🚀 Σύνταξη Νέου Βελτιστοποιημένου Προγράμματος Βαρδιών (AI CFO)", type="primary", icon=":material/auto_awesome:"):
+            if not gemini_api_key:
+                st.error(f"Συμπληρώστε πρώτα το API Key ({ai_provider_choice}) στην Πλαϊνή Μπάρα (Sidebar)!")
+            elif GENAI_AVAILABLE or ai_provider_choice != "Google Gemini":
+                with st.spinner(f"Το AI CFO ({selected_gemini_model} με Thinking: {selected_thinking_level}) σχεδιάζει το νέο πρόγραμμα βαρδιών..."):
+                    try:
+                        ai_roster_payload = {
+                            "average_hourly_cost": round(float(avg_h_cost), 2),
+                            "overstaffed_zones": ov_blocks[:5],
+                            "understaffed_zones": un_blocks[:3],
+                            "weekly_capacity_hours_by_day": {
+                                DAYS_GR[d]: round(float(np.sum(sched_cap_matrix[d, :])), 1) for d in range(6)
+                            },
+                            "weekly_demand_hours_by_day": {
+                                DAYS_GR[d]: round(float(np.sum(demand_matrix[d, :])), 1) for d in range(6)
+                            },
+                            "hourly_excess_by_day": {
+                                DAYS_GR[d]: [round(float(sched_cap_matrix[d, h] - demand_matrix[d, h]), 1) for h in range(12)] for d in range(6)
+                            }
+                        }
+
+                        prompt_roster = f"""
+                        Είσαι ο Senior CFO & Operations Director ενός επιτυχημένου Nail Salon.
+                        Έχεις μπροστά σου τα πραγματικά μαθηματικά δεδομένα ζήτησης (ραντεβού) και δυναμικότητας (βάρδιες τεχνιτριών) για κάθε ημέρα και ώρα:
+                        ΔΕΔΟΜΕΝΑ: {json.dumps(ai_roster_payload, ensure_ascii=False)}
+
+                        Στόχος σου είναι να ΕΞΑΛΕΙΨΕΙΣ τις νεκρές ώρες (idle time) και να αυξήσεις το καθαρό κέρδος στην τσέπη του ιδιοκτήτη.
+                        Σύνταξε μία πρακτική, συγκεκριμένη έκθεση στα Ελληνικά με:
+                        1. **Συγκεκριμένο Πρόγραμμα Νέων Βαρδιών (Ανά Ημέρα Δευτ-Σαβ):**
+                           - Ποιες ώρες ακριβώς να ανοίγει η βάρδια κάθε τεχνίτριας (π.χ. Τρίτη: 1η τεχνίτρια 11:30-19:30 αντί για 09:30-17:30, 2η τεχνίτρια 13:00-21:00).
+                           - Ποιες ημέρες να μειωθούν οι συνολικές ώρες και σε ποιες ημέρες αιχμής (Παρασκευή/Σάββατο) να μεταφερθούν.
+                        2. **Κανόνας Κλειδώματος Ραντεβού στο Treatwell / Ημερολόγιο (Slot Packing Policy):**
+                           - Πώς να κλείνονται τα ραντεβού (back-to-back, ελάχιστο κενό) ώστε να μην αφήνουν οι πελάτισσες ορφανά 30λεπτα.
+                        3. **Οικονομική Αποτίμηση:**
+                           - Πόσες νεκρές ώρες κερδίζονται ανά εβδομάδα.
+                           - Ακριβής εκτίμηση μηνιαίας και ετήσιας εξοικονόμησης σε Ευρώ.
+                        """
+
+                        resp_txt, used_m = call_gemini_smart(
+                            api_key=gemini_api_key,
+                            contents=prompt_roster,
+                            expect_json=False,
+                            preferred_model=selected_gemini_model,
+                            provider=ai_provider_choice,
+                            thinking_level=selected_thinking_level
+                        )
+                        plan_obj = {
+                            "model": used_m,
+                            "ts": datetime.now().strftime("%d/%m/%Y %H:%M"),
+                            "report_md": resp_txt
+                        }
+                        st.session_state["last_roster_plan"] = plan_obj
+                        save_app_config_json("__LAST_ROSTER_REBALANCER_AI__", plan_obj)
+                        st.toast("Το νέο πλάνο βαρδιών αποθηκεύτηκε μόνιμα στη βάση!", icon=":material/check_circle:")
+                    except Exception as e:
+                        st.error(f"Σφάλμα AI API: {e}")
+
+        active_plan = st.session_state.get("last_roster_plan")
+        if isinstance(active_plan, dict) and active_plan.get("report_md"):
+            st.divider()
+            st.info(
+                f"📌 **Αποθηκευμένο Πλάνο AI Rebalancer** • Ημερομηνία: `{active_plan.get('ts', '-')}` • Μοντέλο: `{active_plan.get('model', '-')}`",
+                icon=":material/bookmark_added:"
+            )
+            st.markdown(active_plan["report_md"])
+
+
 # =====================================================================
 # TAB 3: ΠΡΟΣΩΠΙΚΟ, IDLE TIME & ΒΕΛΤΙΣΤΟΠΟΙΗΤΗΣ ΒΑΡΔΙΩΝ
 # =====================================================================
@@ -3524,6 +4180,25 @@ with tab_staff:
                     st.markdown("**Ζώνες Έλλειψης Προσωπικού**")
                     if un_blocks:
                         st.dataframe(pd.DataFrame(un_blocks), hide_index=True, width="stretch")
+
+        st.space("small")
+        render_daily_gantt_idle_detector(df_comp, db_schedules, staff_hourly_lookup, use_rolling_schedule)
+
+        st.space("small")
+        render_shift_rebalancing_sandbox(sched_cap_matrix, demand_matrix, active_staff_grid, avg_h_cost)
+
+        st.space("small")
+        render_ai_shift_rebalancer(
+            sched_cap_matrix,
+            demand_matrix,
+            ov_blocks,
+            un_blocks,
+            avg_h_cost,
+            selected_gemini_model,
+            ai_provider_choice,
+            selected_thinking_level,
+            gemini_api_key
+        )
 
 # =====================================================================
 # TAB 3: ΥΠΗΡΕΣΙΕΣ, ΚΑΝΑΛΙΑ TREATWELL & ΠΩΛΗΣΕΙΣ ΛΙΑΝΙΚΗΣ
