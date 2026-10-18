@@ -1,0 +1,20 @@
+# Streamlit secrets & local credentials (NEVER COMMIT TO GITHUB)
+.streamlit/secrets.toml
+.env
+*.pem
+*.key
+
+# Python cache & virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+
+# Local data exports & backups
+*.csv
+uploads/
+treatwell_schedules*.json
+Προγραμμα/
+app_backup.py
