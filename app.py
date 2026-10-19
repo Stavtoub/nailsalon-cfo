@@ -432,6 +432,30 @@ def load_all_db_data(cache_v: int = 3):
 
 df_staff_db, df_services_db, df_expenses_db, df_bookings_db, db_schedules, db_app_settings, df_payroll_db, df_expenses_ledger_db = load_all_db_data()
 
+def strip_greek_accents(text):
+    if not text:
+        return ""
+    return ''.join(c for c in unicodedata.normalize('NFD', str(text)) if unicodedata.category(c) != 'Mn').strip().lower()
+
+srv_catalog_lookup = {}
+if not df_services_db.empty:
+    for _, s_row in df_services_db.iterrows():
+        s_c = strip_greek_accents(re.sub(r'\s+', ' ', str(s_row.get('service_name', ''))))
+        if s_c:
+            srv_catalog_lookup[s_c] = float(s_row.get('gross_price', 0.0) or 0.0)
+
+def get_service_catalog_price(raw_s):
+    """Επιστρέφει την επίσημη τιμή καταλόγου για μια υπηρεσία βάσει ονόματος με αφαίρεση τόνων & fuzzy match."""
+    if not raw_s:
+        return 0.0
+    c_name = strip_greek_accents(re.sub(r'\s+', ' ', str(raw_s)))
+    if c_name in srv_catalog_lookup:
+        return srv_catalog_lookup[c_name]
+    for k, v in srv_catalog_lookup.items():
+        if k in c_name or c_name in k:
+            return v
+    return 0.0
+
 def refresh_data():
     st.cache_data.clear()
     st.rerun()
@@ -1721,14 +1745,24 @@ with st.sidebar:
     with st.container(border=True):
         st.markdown("**Φορολογικά & Προμήθειες Treatwell**")
         vat_rate_pct = st.number_input("Συντελεστής ΦΠΑ (%)", min_value=0.0, max_value=30.0, value=24.0, step=1.0)
-        tw_new_comm_pct = st.slider("Προμήθεια Νέου Πελάτη TW (%)", 0.0, 50.0, 35.0, 0.5)
-        tw_ret_comm_pct = st.slider("Προμήθεια Επαναλαμβανόμενου TW (%)", 0.0, 20.0, 2.0, 0.5)
-        tw_widget_comm_pct = st.slider("Προμήθεια Widget / Social (%)", 0.0, 20.0, 0.0, 0.5)
+        tw_new_comm_pct = st.slider("Προμήθεια Νέου Πελάτη TW (%)", 0.0, 50.0, 25.0, 0.5, key="tw_new_comm_slider_v25")
+        tw_ret_comm_pct = st.slider("Προμήθεια Επαναλαμβανόμενου TW (%)", 0.0, 20.0, 2.0, 0.5, key="tw_ret_comm_slider_v25")
+        tw_widget_comm_pct = st.slider("Προμήθεια Widget / Social (%)", 0.0, 20.0, 0.0, 0.5, key="tw_widget_comm_slider_v25")
         tw_real_new_share_pct = st.slider(
             "% κρατήσεων 'T...' 1ης εμφάνισης που είναι ΠΡΑΓΜΑΤΙΚΑ νέοι πελάτες",
             min_value=10, max_value=100, value=default_tw_real_new_pct, step=5,
             help="Επειδή έχετε ανεβάσει ολόκληρο το ιστορικό 2,5 ετών (17.938 ραντεβού), το σύστημα γνωρίζει ήδη ποιες πελάτισσες έχουν ξανάρθει! Αφήστε το στο 100%."
         )
+
+    with st.container(border=True):
+        st.markdown("**Μη Τιμολογημένα Direct (Treatwell 0 €)**")
+        show_non_calc_direct = st.toggle(
+            "Εμφάνιση Μη Τιμολογημένων Direct",
+            value=st.session_state.get("show_non_calc_direct", True),
+            key="show_non_calc_direct_toggle",
+            help="Όταν είναι ενεργό, εμφανίζει διακριτή στήλη και κάρτες με τα ολοκληρωμένα Direct ραντεβού που καταγράφηκαν στην Treatwell με τιμή 0,00 € και την εκτιμώμενη αξία τους βάσει καταλόγου (Δυνητικός Τζίρος), χωρίς να αλλοιώνεται το πραγματικό λογιστικό ταμείο."
+        )
+        st.session_state["show_non_calc_direct"] = show_non_calc_direct
 
     df_payroll_profiles = get_payroll_profiles_df()
 
@@ -2463,11 +2497,22 @@ if not df_bookings_db.empty:
             - df_filtered.loc[comp_mask, 'labor_cost']
         ).round(2)
 
+        # Υπολογισμός Μη Τιμολογημένων Direct (0 € στην Treatwell αλλά ολοκληρωμένα)
+        zero_direct_mask = comp_mask & (df_filtered['channel'] == 'Direct (Τηλέφωνο)') & (df_filtered['gross_price'] <= 0.05)
+        df_filtered['is_zero_direct'] = zero_direct_mask
+        df_filtered['catalog_price_est'] = df_filtered['raw_service'].apply(get_service_catalog_price)
+        period_non_calc_count = int(zero_direct_mask.sum())
+        period_non_calc_val = round(float(df_filtered.loc[zero_direct_mask, 'catalog_price_est'].sum()), 2)
+    else:
+        period_non_calc_count = 0
+        period_non_calc_val = 0.0
+
     df_comp = df_filtered[df_filtered['status_group'] == 'COMPLETED'].copy()
     df_noshow = df_filtered[df_filtered['status_group'] == 'NO_SHOW'].copy()
     df_cancelled = df_filtered[df_filtered['status_group'] == 'CANCELLED'].copy()
 
     gross_rev = float(df_comp['gross_price'].sum()) if not df_comp.empty else 0.0
+    potential_gross_rev = round(gross_rev + period_non_calc_val, 2)
     vat_total = float(df_comp['vat_amount'].sum()) if not df_comp.empty else 0.0
     net_rev = float(df_comp['net_revenue'].sum()) if not df_comp.empty else 0.0
     comm_total = float(df_comp['commission_fee'].sum()) if not df_comp.empty else 0.0
@@ -2614,6 +2659,11 @@ if not df_bookings_db.empty:
         short_appts = len(s_df[s_df['duration_minutes'] <= 15]) if not s_df.empty else 0
         s_efka_tax = round(max(0.0, decl_cost - s_net_pocket), 2)
 
+        s_zd = s_df[s_df.get('is_zero_direct', False)] if not s_df.empty else pd.DataFrame()
+        s_zd_cnt = len(s_zd)
+        s_zd_val = round(float(s_zd['catalog_price_est'].sum()), 2) if s_zd_cnt > 0 else 0.0
+        s_pot_gross = round(s_gross + s_zd_val, 2)
+
         staff_perf_list.append({
             "Τεχνίτρια": s_name,
             "Ρόλος": "Τεχνίτρια" if role_t == "Τεχνίτρια" else "Διοίκηση/Υποδοχή",
@@ -2628,6 +2678,9 @@ if not df_bookings_db.empty:
             "Μισθοδοσία (€)": round(decl_cost, 2),
             "Κόστος Νεκρού Χρόνου (€)": round(idle_cost_s, 2),
             "Μικτός Τζίρος (€)": round(s_gross, 2),
+            "Μη_Τιμολογημένα_Direct_Ραντ": s_zd_cnt,
+            "Μη_Τιμολογημένα_Direct_Αξία": s_zd_val,
+            "Δυνητικός_Τζίρος": s_pot_gross,
             "Καθαρός Τζίρος (€)": round(s_net_rev, 2),
             "Προμήθειες TW (€)": round(s_comm, 2),
             "Υλικά (€)": round(s_mat, 2),
@@ -2756,6 +2809,21 @@ if not df_bookings_db.empty:
             Άμεσο_Κέρδος=('net_profit', 'sum'),
             Λεπτά_Εργασίας=('duration_minutes', 'sum')
         ).reset_index()
+
+        if 'is_zero_direct' in df_comp.columns:
+            zd_srv = df_comp[df_comp['is_zero_direct']].groupby('raw_service').agg(
+                Μη_Τιμολογημένα_Direct_Ραντ=('unique_id', 'count'),
+                Μη_Τιμολογημένα_Direct_Αξία=('catalog_price_est', 'sum')
+            ).reset_index()
+            srv_matrix = pd.merge(srv_matrix, zd_srv, on='raw_service', how='left')
+        else:
+            srv_matrix['Μη_Τιμολογημένα_Direct_Ραντ'] = 0
+            srv_matrix['Μη_Τιμολογημένα_Direct_Αξία'] = 0.0
+
+        srv_matrix['Μη_Τιμολογημένα_Direct_Ραντ'] = srv_matrix['Μη_Τιμολογημένα_Direct_Ραντ'].fillna(0).astype(int)
+        srv_matrix['Μη_Τιμολογημένα_Direct_Αξία'] = srv_matrix['Μη_Τιμολογημένα_Direct_Αξία'].fillna(0.0).round(2)
+        srv_matrix['Δυνητικός_Τζίρος'] = (srv_matrix['Μικτός_Τζίρος'] + srv_matrix['Μη_Τιμολογημένα_Direct_Αξία']).round(2)
+
         srv_matrix['Μέση_Διάρκεια_Λεπτά'] = (srv_matrix['Λεπτά_Εργασίας'] / srv_matrix['Ραντεβού']).round(0)
         srv_matrix['Καθαρό_Έσοδο_Ώρας'] = (srv_matrix['Καθαρός_Τζίρος'] / (srv_matrix['Λεπτά_Εργασίας'].replace(0, np.nan) / 60.0)).fillna(0).round(2)
         srv_matrix['Αναλογία_Παγίων'] = (srv_matrix['Λεπτά_Εργασίας'] * fixed_overhead_per_min).round(2)
@@ -2788,6 +2856,11 @@ def compute_period_pnl_summary(p_start_d: date, p_end_d: date, p_label: str):
     if p_comp.empty:
         return None
 
+    # Υπολογισμός Μη Τιμολογημένων Direct για την περίοδο
+    p_non_calc_mask = (p_df['status_group'] == 'COMPLETED') & (p_df['channel'] == 'Direct (Τηλέφωνο)') & (p_df['gross_price'] <= 0.05)
+    p_non_calc_cnt = int(p_non_calc_mask.sum())
+    p_non_calc_val = round(float(p_df.loc[p_non_calc_mask, 'raw_service'].apply(get_service_catalog_price).sum()), 2) if p_non_calc_cnt > 0 else 0.0
+
     p_comp['net_revenue'] = (p_comp['gross_price'] / (1.0 + vat_rate_pct / 100.0)).round(2)
     p_comp['vat_amount'] = (p_comp['gross_price'] - p_comp['net_revenue']).round(2)
     effective_new_comm = (tw_new_comm_pct * (tw_real_new_share_pct / 100.0)) + (tw_ret_comm_pct * (1.0 - tw_real_new_share_pct / 100.0))
@@ -2799,6 +2872,7 @@ def compute_period_pnl_summary(p_start_d: date, p_end_d: date, p_label: str):
     p_comp['labor_cost'] = ((p_comp['duration_minutes'] / 60.0) * p_staff_rates).round(2)
 
     p_gross = round(float(p_comp['gross_price'].sum()), 2)
+    p_potential_gross = round(p_gross + p_non_calc_val, 2)
     p_vat = round(float(p_comp['vat_amount'].sum()), 2)
     p_net = round(p_gross - p_vat, 2)
     p_comm = round(float(p_comp['commission_fee'].sum()), 2)
@@ -2951,6 +3025,9 @@ def compute_period_pnl_summary(p_start_d: date, p_end_d: date, p_label: str):
         "Περίοδος": p_label,
         "Ραντεβού": p_cnt,
         "Μικτός Τζίρος (€)": p_gross,
+        "Μη Τιμολογημένα Direct (Ραντ)": p_non_calc_cnt,
+        "Μη Τιμολογημένα Direct Αξία (€)": p_non_calc_val,
+        "Δυνητικός Τζίρος (€)": p_potential_gross,
         "Καθαρός Τζίρος προ ΦΠΑ (€)": p_net,
         "ΦΠΑ (€)": p_vat,
         "Μέση Απόδειξη AOV (€)": round(p_aov, 2),
@@ -3107,8 +3184,8 @@ def build_dynamic_cfo_diagnostics():
             "title": f"Προμήθειες Treatwell (-{comm_total:,.2f} € / {p_comm_pct:.1f}%)",
             "body": (
                 f"Το Treatwell απορρόφησε <b>-{comm_total:,.2f} €</b> (<b>{p_comm_pct:.1f}%</b> του μικτού τζίρου) από "
-                f"<b>{len(tw_new_df)} ραντεβού νέων πελατών</b> (35% προμήθεια) και <b>{len(tw_ret_df)} επαναλαμβανόμενων</b>.<br>"
-                f"Κάθε νέο ραντεβού μέσω Marketplace στερεί ~7,00 € καθαρού κέρδους."
+                f"<b>{len(tw_new_df)} ραντεβού νέων πελατών</b> ({tw_new_comm_pct:.0f}% προμήθεια) και <b>{len(tw_ret_df)} επαναλαμβανόμενων</b>.<br>"
+                f"Κάθε νέο ραντεβού μέσω Marketplace επιβαρύνεται με προμήθεια {tw_new_comm_pct:.0f}%."
             ),
             "action": "Μετατρέψτε τις νέες πελάτισσες του Treatwell σε Direct (κλείσιμο επόμενου ραντεβού στο ταμείο με 0% προμήθεια)."
         })
@@ -3214,674 +3291,12 @@ def build_dynamic_cfo_diagnostics():
     diagnostics.sort(key=lambda x: (1 if x["severity_rank"] > 0 else 0, x["impact_eur"]), reverse=True)
     return diagnostics
 
-# --- 11. ΠΛΟΗΓΗΣΗ 6 ΕΣΤΙΑΣΜΕΝΩΝ ΚΑΡΤΕΛΩΝ (ΜΕ ΝΕΑ ΚΑΡΤΕΛΑ ΣΥΓΚΡΙΣΗΣ ΠΕΡΙΟΔΩΝ) ---
-tab_cfo, tab_compare, tab_staff, tab_services, tab_sim, tab_admin = st.tabs([
-    ":material/monitoring: 1. Γιατί Δεν Μένει Κέρδος; (Σύνοψη CFO)",
-    ":material/compare_arrows: 2. Σύγκριση Περιόδων (Μήνες / Έτη)",
-    ":material/groups: 3. Προσωπικό, Idle Time & Βάρδιες",
-    ":material/spa: 4. Υπηρεσίες, Treatwell & Λιανική",
-    ":material/tune: 5. Προσομοιωτής Κερδοφορίας & AI CFO",
-    ":material/settings: 6. Δεδομένα, Βάρδιες & Ρυθμίσεις"
-])
-
-# =====================================================================
-# TAB 1: ΓΙΑΤΙ ΔΕΝ ΜΕΝΕΙ ΚΕΡΔΟΣ; (ΣΥΝΟΨΗ CFO & ΥΒΡΙΔΙΚΗ ΔΙΑΓΝΩΣΗ)
-# =====================================================================
-with tab_cfo:
-    if df_bookings_db.empty or df_comp.empty:
-        st.info("Δεν υπάρχουν ολοκληρωμένα ραντεβού για την επιλεγμένη περίοδο. Επιλέξτε άλλη περίοδο με τα βελάκια ◀ / ▶.")
-    else:
-        # 1. Ο ΚΑΝΟΝΑΣ ΤΩΝ 100€ (ΠΟΥ ΠΑΝΕ ΤΑ ΛΕΦΤΑ;)
-        with st.container(border=True):
-            st.subheader("💶 Ο Κανόνας των 100 € — Πού πηγαίνουν τα χρήματα του ταμείου;", icon=":material/payments:")
-            st.caption(f"Για κάθε **100,00 €** που πληρώνουν οι πελάτισσες στο ταμείο (`{period_label}`), δείτε πώς κατανέμεται ο τζίρος:")
-
-            if gross_rev > 0:
-                p_vat = (vat_total / gross_rev) * 100.0
-                p_comm = (comm_total / gross_rev) * 100.0
-                p_mat = (mat_total / gross_rev) * 100.0
-                p_prod_lab = (labor_prod_total / gross_rev) * 100.0
-                p_idle_lab = (idle_labor_cost / gross_rev) * 100.0
-                p_fixed = (fixed_expenses / gross_rev) * 100.0
-                p_net = (true_net_profit / gross_rev) * 100.0
-            else:
-                p_vat = p_comm = p_mat = p_prod_lab = p_idle_lab = p_fixed = p_net = 0.0
-
-            fig_100 = go.Figure()
-            segments_100 = [
-                ("ΦΠΑ (24%)", p_vat, vat_total, "#64748b"),
-                ("Προμήθειες Treatwell", p_comm, comm_total, "#f59e0b"),
-                ("Αναλώσιμα Υλικά", p_mat, mat_total, "#8b5cf6"),
-                ("Εργασία σε Ραντεβού", p_prod_lab, labor_prod_total, "#3b82f6"),
-                ("Νεκρός Χρόνος Βαρδιών (Idle)", p_idle_lab, idle_labor_cost, "#ef4444"),
-                ("Πάγια (Ενοίκιο/ΔΕΚΟ/Λογ.)", p_fixed, fixed_expenses, "#ec4899"),
-            ]
-            for seg_name, seg_pct, seg_eur, seg_col in segments_100:
-                fig_100.add_trace(go.Bar(
-                    y=["Κατανομή 100€"],
-                    x=[round(seg_pct, 1)],
-                    name=f"{seg_name}: {seg_pct:.1f}€ ({seg_eur:,.0f}€)",
-                    orientation="h",
-                    marker_color=seg_col,
-                    text=[f"{seg_pct:.1f}€" if seg_pct >= 5 else ""],
-                    textposition="inside",
-                    hovertemplate=f"<b>{seg_name}</b><br>{seg_pct:.1f} € ανά 100 € τζίρου<br>Σύνολο: {seg_eur:,.2f} €<extra></extra>"
-                ))
-            if p_net > 0:
-                fig_100.add_trace(go.Bar(
-                    y=["Κατανομή 100€"],
-                    x=[round(p_net, 1)],
-                    name=f"Καθαρό Κέρδος: +{p_net:.1f}€ (+{true_net_profit:,.0f}€)",
-                    orientation="h",
-                    marker_color="#10b981",
-                    text=[f"+{p_net:.1f}€" if p_net >= 4 else ""],
-                    textposition="inside"
-                ))
-            fig_100.update_layout(
-                barmode="stack",
-                height=120,
-                margin=dict(t=5, b=5, l=5, r=5),
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(0,0,0,0)",
-                xaxis=dict(title="Ευρώ ανά 100 € Μικτού Τζίρου", ticksuffix=" €"),
-                yaxis=dict(showticklabels=False),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
-            )
-            st.plotly_chart(fig_100, width="stretch")
-
-            k1, k2, k3, k4 = st.columns(4)
-            k1.metric(
-                "1. Μικτός Τζίρος Ταμείου",
-                f"{gross_rev:,.2f} €",
-                f"Καθαρός προ ΦΠΑ: {net_rev:,.2f} € ({completed_count:,} ραντ.)",
-                delta_color="off",
-                border=True
-            )
-            k2.metric(
-                "2. Προμήθειες TW & Υλικά",
-                f"-{(comm_total + mat_total):,.2f} €",
-                f"TW: -{comm_total:,.0f} € ({p_comm:.1f}%) | Υλικά: -{mat_total:,.0f} €",
-                delta_color="inverse",
-                border=True
-            )
-            k3.metric(
-                "3. Μισθοδοσία & Πάγια",
-                f"-{(total_declared_payroll + fixed_expenses):,.2f} €",
-                f"Μισθοί: -{total_declared_payroll:,.0f} € (Idle: -{idle_labor_cost:,.0f} €) | Πάγια: -{fixed_expenses:,.0f} €",
-                delta_color="inverse",
-                border=True
-            )
-            k4.metric(
-                "4. Τελικό Καθαρό Αποτέλεσμα",
-                f"{true_net_profit:+,.2f} €",
-                f"{p_net:+.1f} € ανά 100 € τζίρου (Πληρότητα {overall_occ_pct:.1f}%)",
-                delta_color="normal" if true_net_profit >= 0 else "inverse",
-                border=True
-            )
-
-        st.space("small")
-
-        # --- ΕΙΔΙΚΗ ΕΝΟΤΗΤΑ CFO: PRIME COST, BREAK-EVEN & ΔΟΜΗ ΕΞΟΔΩΝ ---
-        with st.container(border=True):
-            st.markdown("##### 🎯 Στρατηγικοί Δείκτες CFO: Prime Cost, Νεκρό Σημείο & Ταμειακή Ροή Εξόδων")
-            col_strat1, col_strat2, col_strat3 = st.columns(3, gap="medium")
-            with col_strat1:
-                prime_status = "🟢 Υγιές (<55%)" if prime_cost_pct <= 55.0 else ("🟠 Οριακό (55%-62%)" if prime_cost_pct <= 62.0 else "🔴 Υψηλό (>62%)")
-                st.metric(
-                    "Prime Cost (Μισθοδοσία + Υλικά)",
-                    f"{prime_cost:,.2f} €",
-                    f"{prime_cost_pct:.1f}% του καθαρού ({prime_status})",
-                    delta_color="off",
-                    border=True,
-                    help="Το Prime Cost είναι το άθροισμα μισθοδοσίας και αναλωσίμων. Στον κλάδο της ομορφιάς/νυχιών, το βέλτιστο όριο είναι 45%–55% του καθαρού τζίρου."
-                )
-            with col_strat2:
-                be_margin_eur = round(net_rev - break_even_rev, 2)
-                st.metric(
-                    "Νεκρό Σημείο Τζίρου (Break-Even)",
-                    f"{break_even_rev:,.2f} €",
-                    f"{be_margin_eur:+,.2f} € περιθώριο ασφαλείας" if net_rev > 0 else "0.00 €",
-                    delta_color="normal" if be_margin_eur >= 0 else "inverse",
-                    border=True,
-                    help="Ο καθαρός τζίρος που απαιτείται ώστε τα έσοδα να καλύψουν ακριβώς τη μισθοδοσία και τα πάγια λειτουργικά έξοδα."
-                )
-            with col_strat3:
-                be_appts_diff = completed_count - break_even_appts
-                st.metric(
-                    "Ελάχιστα Ραντεβού Νεκρού Σημείου",
-                    f"{break_even_appts:,} ραντεβού",
-                    f"{be_appts_diff:+,} έναντι πραγματικών ({completed_count:,})" if completed_count > 0 else "0 ραντ.",
-                    delta_color="normal" if be_appts_diff >= 0 else "inverse",
-                    border=True,
-                    help="Ο αριθμός ολοκληρωμένων ραντεβού που χρειάζονται για να μηδενιστεί η ζημιά. Κάθε επιπλέον ραντεβού παράγει καθαρό κέρδος."
-                )
-
-            # Υπο-ενότητα Δομής Εξόδων & Ταμειακής Ροής
-            col_exp_viz, col_exp_cf = st.columns([1.25, 1.15], gap="medium")
-            with col_exp_viz:
-                if has_actual_expenses:
-                    st.caption("📊 **Πραγματικά Έξοδα Περιόδου ανά Κατηγορία (expenses_ledger)**")
-                    cat_items = sorted(exp_by_cat.items(), key=lambda x: x[1], reverse=True)
-                    fig_exp_cat = go.Figure(go.Pie(
-                        labels=[k for k, _ in cat_items],
-                        values=[v for _, v in cat_items],
-                        hole=0.45,
-                        textinfo="percent+label",
-                        marker=dict(colors=["#3b82f6", "#10b981", "#f59e0b", "#8b5cf6", "#ec4899", "#64748b"])
-                    ))
-                    fig_exp_cat.update_layout(height=240, margin=dict(t=10, b=10, l=10, r=10), showlegend=False, paper_bgcolor="rgba(0,0,0,0)")
-                    st.plotly_chart(fig_exp_cat, width="stretch")
-                else:
-                    st.caption("🏢 **Προϋπολογιστικά Πάγια Περιόδου (expenses_log)**")
-                    st.info(
-                        f"💡 Για την περίοδο `{period_label}` υπολογίζονται προϋπολογιστικά πάγια **{fixed_expenses:,.2f} €** "
-                        f"(βάσει του μηνιαίου προϋπολογισμού {monthly_fixed:,.2f} €). "
-                        f"Καταχωρήστε τα πραγματικά τιμολόγια στην **Καρτέλα 5 (Διαχείριση)** για πλήρη λογιστική ακρίβεια!",
-                        icon=":material/info:"
-                    )
-            with col_exp_cf:
-                st.caption("💶 **Ταμειακή Ροή, Εκκαθάριση ΦΠΑ & Ταμείο Περιόδου**")
-                net_vat_due = round(vat_total - period_vat_expenses, 2)
-                cash_wages_pocket = total_net_pocket_payroll
-                tot_cash_outflow = round(cash_wages_pocket + period_gross_expenses, 2) if has_actual_expenses else round(total_all_costs * 1.15, 2)
-                real_cash_pocket = round(gross_rev - tot_cash_outflow, 2)
-                st.html(f"""
-                <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(148,163,184,0.2); border-radius: 8px; padding: 12px 16px; font-size: 0.90rem; line-height: 1.6;">
-                    <div>• Καθαρά Έξοδα Τιμολογίων: <b>{period_net_expenses:,.2f} €</b> | ΦΠΑ Εισροών: <b style="color:#10b981;">+{period_vat_expenses:,.2f} €</b></div>
-                    <div>• Πληρωμές Τιμολογίων & Φόρων (με ΦΠΑ): <b style="color:#ef4444;">-{period_gross_expenses:,.2f} €</b></div>
-                    <div>• Πληρωμές Καθαρών Μισθών: <b style="color:#ef4444;">-{cash_wages_pocket:,.2f} €</b></div>
-                    <hr style="margin: 8px 0; border: none; border-top: 1px solid rgba(148,163,184,0.2);">
-                    <div>• ΦΠΑ Εσόδων: <b>{vat_total:,.2f} €</b> | <b>Εκτιμώμενος ΦΠΑ προς Απόδοση:</b> <b style="color:{'#f59e0b' if net_vat_due > 0 else '#10b981'};">{net_vat_due:,.2f} €</b></div>
-                    <div>• <b>Πραγματικό Ταμειακό Περίσσευμα (Cash Surplus):</b> <b style="color:{'#10b981' if real_cash_pocket > 0 else '#ef4444'}; font-size: 1.02rem;">{real_cash_pocket:+,.2f} €</b></div>
-                    <div style="font-size: 0.78rem; opacity: 0.8; margin-top: 4px;">Πηγή Εξόδων: <b>{'🟢 Πραγματικά Τιμολόγια (expenses_ledger)' if has_actual_expenses else '🟠 Προϋπολογισμός (expenses_log)'}</b></div>
-                </div>
-                """)
-
-        st.space("small")
-
-        # 2. ΥΒΡΙΔΙΚΗ ΜΗΧΑΝΗ ΔΙΑΓΝΩΣΗΣ (ΜΕΡΟΣ Α: ΔΥΝΑΜΙΚΕΣ ΚΑΡΤΕΣ ΙΕΡΑΡΧΗΜΕΝΕΣ ΣΕ ΕΥΡΩ + ΥΓΙΕΙΣ ΔΕΙΚΤΕΣ)
-        all_diagnostics = build_dynamic_cfo_diagnostics()
-        wounds_cnt = sum(1 for d in all_diagnostics if d["severity_rank"] > 0)
-
-        col_diag_h1, col_diag_h2 = st.columns([2.7, 1.3], vertical_alignment="center")
-        with col_diag_h1:
-            if wounds_cnt > 0:
-                st.subheader(f"🔍 Δυναμική Διάγνωση Περιόδου ({wounds_cnt} Πληγές Κέρδους — Ιεραρχημένες σε Ευρώ)", icon=":material/troubleshoot:")
-            else:
-                st.subheader("🟢 Δυναμική Διάγνωση Περιόδου — Όλοι οι Δείκτες Υγιείς!", icon=":material/verified:")
-        with col_diag_h2:
-            ai_btn_clicked = st.button(
-                "✨ Σύνθεση AI CFO γι' αυτή την Περίοδο",
-                type="primary",
-                icon=":material/auto_awesome:",
-                width="stretch",
-                key="btn_hybrid_ai_tab1"
-            )
-
-        top_3_cards = all_diagnostics[:3]
-        col_pk1, col_pk2, col_pk3 = st.columns(3, gap="medium")
-        for idx_c, (col_obj, d_card) in enumerate(zip([col_pk1, col_pk2, col_pk3], top_3_cards)):
-            with col_obj:
-                rank_prefix = f"#{idx_c + 1} " if d_card["severity_rank"] > 0 else ""
-                st.html(f"""
-                <div class="cfo-card {d_card['css_class']}">
-                    <div style="font-size:0.78rem; text-transform:uppercase; letter-spacing:0.04em; opacity:0.85; margin-bottom:4px;">
-                        {d_card['badge']}
-                    </div>
-                    <b style="font-size:1.02rem;">{rank_prefix}{d_card['title']}</b><br><br>
-                    {d_card['body']}<br><br>
-                    👉 <i>{d_card['action']}</i>
-                </div>
-                """)
-
-        if len(all_diagnostics) > 3:
-            with st.expander(f"📋 Προβολή και των {len(all_diagnostics)} Δυναμικών Δεικτών της Περιόδου ({period_label})"):
-                rem_cols = st.columns(min(3, len(all_diagnostics) - 3), gap="medium")
-                for idx_r, d_rem in enumerate(all_diagnostics[3:]):
-                    with rem_cols[idx_r % len(rem_cols)]:
-                        st.html(f"""
-                        <div class="cfo-card {d_rem['css_class']}">
-                            <div style="font-size:0.78rem; text-transform:uppercase; opacity:0.85; margin-bottom:4px;">{d_rem['badge']}</div>
-                            <b>{d_rem['title']}</b><br><br>
-                            {d_rem['body']}<br><br>
-                            👉 <i>{d_rem['action']}</i>
-                        </div>
-                        """)
-
-        # ΜΕΡΟΣ Β ΤΗΣ ΥΒΡΙΔΙΚΗΣ ΜΗΧΑΝΗΣ: ΕΞΑΤΟΜΙΚΕΥΜΕΝΕΣ ΚΑΡΤΕΣ AI CFO (ΜΟΝΙΜΗ ΑΠΟΘΗΚΕΥΣΗ ΣΤΗ ΒΑΣΗ & CACHE)
-        if "hybrid_ai_cache" not in st.session_state:
-            saved_hybrid_db = load_app_config_json("__LAST_HYBRID_CARDS__")
-            st.session_state["hybrid_ai_cache"] = saved_hybrid_db if isinstance(saved_hybrid_db, dict) else {}
-
-        cache_key_period = f"{start_d}_{end_d}_{completed_count}_{round(true_net_profit, 0)}"
-        if ai_btn_clicked:
-            if not gemini_api_key:
-                st.error(f"Συμπληρώστε πρώτα το API Key ({ai_provider_choice}) στην Πλαϊνή Μπάρα (αριστερά)!")
-            elif GENAI_AVAILABLE or ai_provider_choice != "Google Gemini":
-                with st.spinner(f"Ο AI CFO ({selected_gemini_model}) συνδυάζει βάρδιες, υπηρεσίες και τεχνίτριες για την περίοδο {period_label}..."):
-                    try:
-                        ai_summary_payload = {
-                            "period": period_label,
-                            "appointments_completed": completed_count,
-                            "cancelled": len(df_cancelled),
-                            "no_shows": len(df_noshow),
-                            "gross_revenue": round(gross_rev, 2),
-                            "net_revenue": round(net_rev, 2),
-                            "net_revenue_per_productive_hour": round(net_per_prod_h, 2),
-                            "treatwell_commissions": round(comm_total, 2),
-                            "materials_cost": round(mat_total, 2),
-                            "productive_labor_cost": round(labor_prod_total, 2),
-                            "idle_labor_cost": round(idle_labor_cost, 2),
-                            "fixed_expenses": round(fixed_expenses, 2),
-                            "true_net_profit": round(true_net_profit, 2),
-                            "occupancy_pct": round(overall_occ_pct, 1),
-                            "staff_performance": df_tech_perf[[
-                                "Τεχνίτρια", "Ραντεβού", "Ώρες Βάρδιας", "Παραγωγικές Ώρες",
-                                "Νεκρές Ώρες (Idle)", "Πληρότητα (%)", "Πραγματικό Ισοζύγιο (€)"
-                            ]].to_dict(orient="records") if not df_tech_perf.empty else [],
-                            "lowest_margin_services": srv_matrix.sort_values("Πλήρες_Καθαρό_Κέρδος").head(4)[
-                                ["raw_service", "Ραντεβού", "Μικτός_Τζίρος", "Καθαρό_Έσοδο_Ώρας", "Πλήρες_Κέρδος_Ραντεβού"]
-                            ].to_dict(orient="records") if not srv_matrix.empty else [],
-                            "highest_margin_services": srv_matrix.sort_values("Πλήρες_Καθαρό_Κέρδος", ascending=False).head(3)[
-                                ["raw_service", "Ραντεβού", "Μικτός_Τζίρος", "Καθαρό_Έσοδο_Ώρας", "Πλήρες_Κέρδος_Ραντεβού"]
-                            ].to_dict(orient="records") if not srv_matrix.empty else []
-                        }
-                        prompt_hybrid = f"""
-                        Είσαι ο Senior CFO του Nail Salon. Έχεις μπροστά σου τα ακριβή μαθηματικά δεδομένα της περιόδου: {period_label}.
-                        ΜΗΝ επαναλάβεις απλώς τα νούμερα. Κάνε ΣΥΝΔΥΑΣΤΙΚΗ σκέψη (εστίασε στο χαμηλό καθαρό έσοδο ανά παραγωγική ώρα στις βασικές υπηρεσίες Ημιμόνιμο/Gel, ποιες υπηρεσίες χαλάνε τον χρόνο, ποιες τεχνίτριες έχουν αρνητικό ισοζύγιο και πώς κινήθηκε το Treatwell).
-                        Επέστρεψε ΑΠΟΚΛΕΙΣΤΙΚΑ έγκυρο JSON (λίστα με 3 αντικείμενα) με την εξής δομή:
-                        [
-                          {{
-                            "title": "Σύντομος τίτλος εύρηματος/δράσης #1",
-                            "Finding": "2-3 προτάσεις συνδυαστικής διάγνωσης με ονόματα τεχνιτριών/υπηρεσιών της περιόδου",
-                            "Action": "Συγκεκριμένη λύση και εκτιμώμενο όφελος σε Ευρώ"
-                          }},
-                          ... (3 κάρτες συνολικά)
-                        ]
-                        ΔΕΔΟΜΕΝΑ: {json.dumps(ai_summary_payload, ensure_ascii=False)}
-                        """
-                        raw_ai_json, used_m = call_gemini_smart(
-                            api_key=gemini_api_key,
-                            contents=prompt_hybrid,
-                            expect_json=True,
-                            preferred_model=selected_gemini_model,
-                            provider=ai_provider_choice,
-                            thinking_level=selected_thinking_level
-                        )
-                        parsed_cards = clean_json_response(raw_ai_json)
-                        if isinstance(parsed_cards, list) and len(parsed_cards) > 0:
-                            st.session_state["hybrid_ai_cache"][cache_key_period] = {
-                                "cards": parsed_cards,
-                                "model": used_m,
-                                "period": period_label,
-                                "ts": datetime.now().strftime("%d/%m/%Y %H:%M")
-                            }
-                            save_app_config_json("__LAST_HYBRID_CARDS__", st.session_state["hybrid_ai_cache"])
-                    except Exception as e:
-                        st.error(f"Σφάλμα κατά την κλήση του Gemini AI: {e}")
-
-        if cache_key_period in st.session_state["hybrid_ai_cache"]:
-            cached_entry = st.session_state["hybrid_ai_cache"][cache_key_period]
-            if isinstance(cached_entry, dict):
-                ai_cards_list = cached_entry.get("cards", [])
-                ai_model_used = cached_entry.get("model", "")
-                ai_ts = cached_entry.get("ts", "")
-            else:
-                ai_cards_list, ai_model_used = cached_entry
-                ai_ts = ""
-            st.markdown(f"##### 🧠 Συνδυαστικό Σχέδιο Δράσης AI CFO για `{period_label}` *(Μοντέλο: `{ai_model_used}` {f'• Αποθηκεύτηκε: {ai_ts}' if ai_ts else ''})*")
-            ai_cols = st.columns(min(3, len(ai_cards_list)), gap="medium")
-            for idx_ai, c_item in enumerate(ai_cards_list[:3]):
-                with ai_cols[idx_ai]:
-                    st.html(f"""
-                    <div class="cfo-card cfo-card-purple">
-                        <div style="font-size:0.76rem; text-transform:uppercase; opacity:0.85; margin-bottom:4px;">✨ AI CFO Σύσταση #{idx_ai+1}</div>
-                        <b style="font-size:1.0rem;">{c_item.get('title', '')}</b><br><br>
-                        {c_item.get('Finding', '')}<br><br>
-                        🎯 <b>Δράση & Όφελος:</b> <i>{c_item.get('Action', '')}</i>
-                    </div>
-                    """)
-
-        st.space("small")
-
-        # 3. ΚΑΤΑΡΡΑΚΤΗΣ P&L & ΧΡΟΝΙΚΗ ΕΞΕΛΙΞΗ (ΔΙΠΛΑ-ΔΙΠΛΑ)
-        col_ch1, col_ch2 = st.columns([1.1, 1.2], gap="medium")
-
-        with col_ch1:
-            with st.container(border=True):
-                st.subheader("📉 Καταρράκτης Κερδοφορίας (P&L Bridge)", icon=":material/waterfall_chart:")
-                fig_water = go.Figure(go.Waterfall(
-                    orientation="v",
-                    measure=["absolute", "relative", "total", "relative", "relative", "relative", "total", "relative", "relative", "total"],
-                    x=[
-                        "Μικτός Τζίρος", "ΦΠΑ (-24%)", "Καθαρός Τζίρος",
-                        "Προμήθειες TW", "Υλικά", "Εργασία Ραντεβού",
-                        "Κέρδος Ραντεβού", "Νεκρός Χρόνος", "Πάγια Έξοδα", "Τελικό Αποτέλεσμα"
-                    ],
-                    y=[
-                        gross_rev, -vat_total, 0,
-                        -comm_total, -mat_total, -labor_prod_total,
-                        0, -idle_labor_cost, -fixed_expenses, 0
-                    ],
-                    connector={"line": {"color": "#64748b", "width": 1.5}},
-                    decreasing={"marker": {"color": "#ef4444"}},
-                    increasing={"marker": {"color": "#10b981"}},
-                    totals={"marker": {"color": "#3b82f6"}}
-                ))
-                fig_water.update_layout(height=360, margin=dict(t=20, b=20, l=10, r=10), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-                st.plotly_chart(fig_water, width="stretch")
-
-        with col_ch2:
-            with st.container(border=True):
-                use_monthly_trend = (end_d - start_d).days > 75
-                st.subheader(
-                    f"📈 Εξέλιξη ανά {'Μήνα' if use_monthly_trend else 'Εβδομάδα'} (Τζίρος vs Μισθοί vs Κέρδος)",
-                    icon=":material/trending_up:"
-                )
-                if use_monthly_trend:
-                    df_comp['ym_str'] = df_comp['appointment_date_dt'].dt.strftime('%Y-%m')
-                    tr_grp = df_comp.groupby('ym_str').agg(
-                        Καθαρός_Τζίρος=('net_revenue', 'sum'),
-                        Προμήθειες=('commission_fee', 'sum'),
-                        Υλικά=('material_cost', 'sum'),
-                        Εργασία_Ραντεβού=('labor_cost', 'sum')
-                    ).reset_index().sort_values('ym_str')
-                    mo_pay = {}
-                    for m_str, pay_val in daily_payroll_by_monday.items():
-                        ym_k = m_str[:7]
-                        mo_pay[ym_k] = mo_pay.get(ym_k, 0.0) + pay_val
-                    mo_pay_list = []
-                    for _, r in tr_grp.iterrows():
-                        ym_s = str(r['ym_str'])
-                        if use_accounting_payroll:
-                            yr_i, mo_i = int(ym_s[:4]), int(ym_s[5:7])
-                            ms_d = max(start_d, date(yr_i, mo_i, 1))
-                            me_d = min(end_d, date(yr_i, 12, 31) if mo_i == 12 else (date(yr_i, mo_i + 1, 1) - timedelta(days=1)))
-                            ec_m, _, sc_m, _, _ = compute_accounting_payroll_for_period(ms_d, me_d)
-                            tot_m_pay = sum(ec_m.values()) - (0.0 if include_support_staff else sc_m)
-                            mo_pay_list.append(round(max(float(r['Εργασία_Ραντεβού']), tot_m_pay), 2))
-                        else:
-                            mo_pay_list.append(round(max(float(r['Εργασία_Ραντεβού']), float(mo_pay.get(ym_s, 0.0))), 2))
-                    tr_grp['Μισθοδοσία_Βαρδιών'] = mo_pay_list
-                    tr_grp['Πάγια'] = round(monthly_fixed, 2)
-                    tr_grp['Καθαρό_Κέρδος'] = (
-                        tr_grp['Καθαρός_Τζίρος'] - tr_grp['Προμήθειες'] - tr_grp['Υλικά'] - tr_grp['Μισθοδοσία_Βαρδιών'] - tr_grp['Πάγια']
-                    ).round(2)
-                    x_col_tr = 'ym_str'
-                else:
-                    tr_grp = df_comp.groupby('monday_date_str').agg(
-                        Καθαρός_Τζίρος=('net_revenue', 'sum'),
-                        Προμήθειες=('commission_fee', 'sum'),
-                        Υλικά=('material_cost', 'sum'),
-                        Εργασία_Ραντεβού=('labor_cost', 'sum')
-                    ).reset_index().sort_values('monday_date_str')
-                    wk_pay_list = []
-                    for _, r in tr_grp.iterrows():
-                        m_s_w = str(r['monday_date_str'])
-                        if use_accounting_payroll:
-                            ws_d = max(start_d, datetime.strptime(m_s_w, "%Y-%m-%d").date())
-                            we_d = min(end_d, ws_d + timedelta(days=6))
-                            ec_w, _, sc_w, _, _ = compute_accounting_payroll_for_period(ws_d, we_d)
-                            tot_w_pay = sum(ec_w.values()) - (0.0 if include_support_staff else sc_w)
-                            wk_pay_list.append(round(max(float(r['Εργασία_Ραντεβού']), tot_w_pay), 2))
-                        else:
-                            wk_pay_list.append(round(max(float(r['Εργασία_Ραντεβού']), float(daily_payroll_by_monday.get(m_s_w, 0.0))), 2))
-                    tr_grp['Μισθοδοσία_Βαρδιών'] = wk_pay_list
-                    tr_grp['Πάγια'] = tr_grp['monday_date_str'].apply(
-                        lambda m: round(monthly_fixed * (7.0 / 30.4375), 2) if wk_counts.get(m, 0) >= 25 else round(monthly_fixed * (3.0 / 30.4375), 2)
-                    )
-                    tr_grp['Καθαρό_Κέρδος'] = (
-                        tr_grp['Καθαρός_Τζίρος'] - tr_grp['Προμήθειες'] - tr_grp['Υλικά'] - tr_grp['Μισθοδοσία_Βαρδιών'] - tr_grp['Πάγια']
-                    ).round(2)
-                    x_col_tr = 'monday_date_str'
-
-                fig_tr = go.Figure()
-                fig_tr.add_trace(go.Bar(x=tr_grp[x_col_tr], y=tr_grp['Καθαρός_Τζίρος'], name="Καθαρός Τζίρος (προ ΦΠΑ)", marker_color="#38bdf8"))
-                fig_tr.add_trace(go.Bar(x=tr_grp[x_col_tr], y=tr_grp['Μισθοδοσία_Βαρδιών'], name="Συνολική Μισθοδοσία Εργοδότη", marker_color="#f59e0b"))
-                fig_tr.add_trace(go.Scatter(
-                    x=tr_grp[x_col_tr], y=tr_grp['Καθαρό_Κέρδος'],
-                    name="Καθαρό Αποτέλεσμα (€)",
-                    mode="lines+markers+text",
-                    text=[f"{v:+.0f}€" for v in tr_grp['Καθαρό_Κέρδος']],
-                    textposition="top center",
-                    line=dict(color="#10b981", width=3)
-                ))
-                fig_tr.update_layout(
-                    barmode="group", height=360, margin=dict(t=20, b=20, l=10, r=10),
-                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
-                )
-                st.plotly_chart(fig_tr, width="stretch")
-
-# =====================================================================
-# TAB 2: ΣΥΓΚΡΙΣΗ ΠΕΡΙΟΔΩΝ (ΜΗΝΑΣ ΜΕ ΜΗΝΑ / ΕΤΟΣ ΜΕ ΕΤΟΣ / ΠΙΝΑΚΑΣ ΙΣΤΟΡΙΚΟΥ)
-# =====================================================================
-with tab_compare:
-    if df_bookings_db.empty:
-        st.info("Δεν υπάρχουν δεδομένα στη βάση για σύγκριση περιόδων.")
-    else:
-        comp_mode = st.segmented_control(
-            "Επιλέξτε Τρόπο Σύγκρισης Περιόδων",
-            options=[
-                "⚖️ 1. Σύγκριση 2 Περιόδων Δίπλα-Δίπλα (Περίοδος Α vs Περίοδος Β)",
-                "📊 2. Συγκριτικός Πίνακας Όλων των Ετών & Μηνών"
-            ],
-            default="⚖️ 1. Σύγκριση 2 Περιόδων Δίπλα-Δίπλα (Περίοδος Α vs Περίοδος Β)",
-            key="comp_tab_mode"
-        )
-
-        st.space("small")
-
-        if comp_mode.startswith("⚖️"):
-            with st.container(border=True):
-                st.subheader("⚖️ Σύγκριση 2 Περιόδων Δίπλα-Δίπλα (Μήνες, Έτη ή Εβδομάδες)", icon=":material/compare_arrows:")
-                c_gran, c_pa, c_pb = st.columns([1.2, 1.9, 1.9], vertical_alignment="bottom")
-                with c_gran:
-                    gran_choice = st.radio(
-                        "Επίπεδο Σύγκρισης:",
-                        options=["📆 Ανά Μήνα", "📅 Ανά Έτος", "🗓️ Ανά Εβδομάδα"],
-                        horizontal=True,
-                        key="comp_gran_radio"
-                    )
-
-                if gran_choice == "📆 Ανά Μήνα":
-                    active_map = month_options_map
-                elif gran_choice == "📅 Ανά Έτος":
-                    active_map = {k: v for k, v in year_options_map.items() if k.startswith("Έτος")}
-                else:
-                    active_map = week_options_map
-
-                opt_keys = list(active_map.keys())
-                if len(opt_keys) >= 2:
-                    with c_pa:
-                        sel_a_key = st.selectbox("🅰️ Περίοδος Α (Εστίαση):", options=opt_keys, index=0, key="comp_sel_a")
-                    with c_pb:
-                        sel_b_key = st.selectbox("🅱️ Περίοδος Β (Σύγκριση με):", options=opt_keys, index=min(1, len(opt_keys) - 1), key="comp_sel_b")
-
-                    da_start, da_end, lbl_a = active_map[sel_a_key]
-                    db_start, db_end, lbl_b = active_map[sel_b_key]
-
-                    sum_a = compute_period_pnl_summary(da_start, da_end, lbl_a)
-                    sum_b = compute_period_pnl_summary(db_start, db_end, lbl_b)
-
-                    if sum_a and sum_b:
-                        def fmt_delta(val_a, val_b, is_pct_point=False, suffix="€"):
-                            diff = val_a - val_b
-                            if is_pct_point:
-                                return f"{diff:+.1f} π.μ. (έναντι {val_b:.1f}%)"
-                            pct_ch = ((val_a - val_b) / abs(val_b) * 100.0) if abs(val_b) > 0.01 else 0.0
-                            return f"{diff:+,.2f} {suffix} ({pct_ch:+.1f}%)"
-
-                        m1, m2, m3, m4, m5 = st.columns(5)
-                        m1.metric(
-                            f"Μικτός Τζίρος ({lbl_a[:14]})",
-                            f"{sum_a['Μικτός Τζίρος (€)']:,.2f} €",
-                            fmt_delta(sum_a['Μικτός Τζίρος (€)'], sum_b['Μικτός Τζίρος (€)']),
-                            border=True
-                        )
-                        m2.metric(
-                            "Ραντεβού",
-                            f"{sum_a['Ραντεβού']:,}",
-                            f"{sum_a['Ραντεβού'] - sum_b['Ραντεβού']:+,} ραντ. ({((sum_a['Ραντεβού'] - sum_b['Ραντεβού']) / max(1, sum_b['Ραντεβού']) * 100):+.1f}%)",
-                            border=True
-                        )
-                        m3.metric(
-                            "Καθαρό Έσοδο / Ώρα",
-                            f"{sum_a['Καθαρό Έσοδο / Παραγ. Ώρα (€/h)']:.2f} €/h",
-                            fmt_delta(sum_a['Καθαρό Έσοδο / Παραγ. Ώρα (€/h)'], sum_b['Καθαρό Έσοδο / Παραγ. Ώρα (€/h)'], suffix="€/h"),
-                            border=True
-                        )
-                        m4.metric(
-                            "Μισθοδοσία & Πληρότητα",
-                            f"{sum_a['Συνολική Μισθοδοσία (€)']:,.0f} € ({sum_a['Πληρότητα (%)']:.1f}%)",
-                            fmt_delta(sum_a['Συνολική Μισθοδοσία (€)'], sum_b['Συνολική Μισθοδοσία (€)']),
-                            delta_color="inverse",
-                            border=True
-                        )
-                        m5.metric(
-                            "Καθαρό Κέρδος",
-                            f"{sum_a['Καθαρό Κέρδος (€)']:+,.2f} €",
-                            fmt_delta(sum_a['Καθαρό Κέρδος (€)'], sum_b['Καθαρό Κέρδος (€)']),
-                            border=True
-                        )
-
-                        col_cmp_ch, col_cmp_tbl = st.columns([1.15, 1.35], gap="medium")
-                        with col_cmp_ch:
-                            chart_metrics = [
-                                "Μικτός Τζίρος (€)", "Καθαρός Τζίρος προ ΦΠΑ (€)",
-                                "Συνολική Μισθοδοσία (€)", "Αναλώσιμα Υλικά (€)",
-                                "Προμήθειες TW (€)", "Πάγια Έξοδα (€)", "Καθαρό Κέρδος (€)"
-                            ]
-                            fig_cmp = go.Figure()
-                            fig_cmp.add_trace(go.Bar(
-                                x=chart_metrics,
-                                y=[sum_a[m] for m in chart_metrics],
-                                name=f"🅰️ {lbl_a}",
-                                marker_color="#3b82f6",
-                                text=[f"{sum_a[m]:,.0f}€" for m in chart_metrics],
-                                textposition="outside"
-                            ))
-                            fig_cmp.add_trace(go.Bar(
-                                x=chart_metrics,
-                                y=[sum_b[m] for m in chart_metrics],
-                                name=f"🅱️ {lbl_b}",
-                                marker_color="#94a3b8",
-                                text=[f"{sum_b[m]:,.0f}€" for m in chart_metrics],
-                                textposition="outside"
-                            ))
-                            fig_cmp.update_layout(
-                                barmode="group", height=380, margin=dict(t=30, b=20, l=10, r=10),
-                                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
-                            )
-                            st.plotly_chart(fig_cmp, width="stretch")
-
-                        with col_cmp_tbl:
-                            rows_cmp = []
-                            ordered_keys = [
-                                ("Ραντεβού", ""),
-                                ("Μικτός Τζίρος (€)", "€"),
-                                ("Καθαρός Τζίρος προ ΦΠΑ (€)", "€"),
-                                ("Μέση Απόδειξη AOV (€)", "€"),
-                                ("Μικτό Έσοδο / Παραγ. Ώρα (€/h)", "€/h"),
-                                ("Καθαρό Έσοδο / Παραγ. Ώρα (€/h)", "€/h"),
-                                ("Παραγωγικές Ώρες (h)", "h"),
-                                ("Ώρες Βάρδιας (h)", "h"),
-                                ("Πληρότητα (%)", "%"),
-                                ("Εργασία σε Ραντεβού (€)", "€"),
-                                ("Κόστος Νεκρού Χρόνου (€)", "€"),
-                                ("Συνολική Μισθοδοσία (€)", "€"),
-                                ("Αναλώσιμα Υλικά (€)", "€"),
-                                ("Prime Cost (€)", "€"),
-                                ("Prime Cost (%)", "%"),
-                                ("Προμήθειες TW (€)", "€"),
-                                ("Πάγια Έξοδα (€)", "€"),
-                                ("Καθαρά Έξοδα Τιμολογίων (€)", "€"),
-                                ("Συνολική Εκροή Εξόδων (€)", "€"),
-                                ("Νεκρό Σημείο Τζίρου (€)", "€"),
-                                ("Νεκρό Σημείο Ραντεβού", ""),
-                                ("Πηγή Εξόδων", ""),
-                                ("Καθαρό Κέρδος (€)", "€"),
-                                ("Περιθώριο Κέρδους (%)", "%")
-                            ]
-                            for k_name, unit_s in ordered_keys:
-                                raw_a = sum_a.get(k_name, 0)
-                                raw_b = sum_b.get(k_name, 0)
-                                if isinstance(raw_a, str) or isinstance(raw_b, str):
-                                    rows_cmp.append({
-                                        "Οικονομικός Δείκτης": k_name,
-                                        f"🅰️ {lbl_a}": str(raw_a),
-                                        f"🅱️ {lbl_b}": str(raw_b),
-                                        "Διαφορά (Α - Β)": "-",
-                                        "Μεταβολή (%)": "-"
-                                    })
-                                    continue
-                                va = float(raw_a)
-                                vb = float(raw_b)
-                                diff_v = va - vb
-                                pct_v = ((va - vb) / abs(vb) * 100.0) if abs(vb) > 0.01 else 0.0
-                                if unit_s == "":
-                                    disp_a = f"{int(va):,}"
-                                    disp_b = f"{int(vb):,}"
-                                    disp_d = f"{int(diff_v):+,}"
-                                else:
-                                    disp_a = f"{va:,.2f} {unit_s}"
-                                    disp_b = f"{vb:,.2f} {unit_s}"
-                                    disp_d = f"{diff_v:+,.2f} {unit_s}"
-                                rows_cmp.append({
-                                    "Οικονομικός Δείκτης": k_name,
-                                    f"🅰️ {lbl_a}": disp_a,
-                                    f"🅱️ {lbl_b}": disp_b,
-                                    "Διαφορά (Α - Β)": disp_d,
-                                    "Μεταβολή (%)": f"{pct_v:+.1f}%"
-                                })
-                            st.dataframe(pd.DataFrame(rows_cmp), hide_index=True, width="stretch", height=420)
-
-        else:
-            with st.container(border=True):
-                st.subheader("📊 Συγκριτικός Πίνακας Όλων των Ετών (2024 vs 2025 vs 2026)", icon=":material/calendar_today:")
-                yr_summaries = []
-                for y_k, (ys, ye, ylbl) in year_options_map.items():
-                    if y_k.startswith("Έτος"):
-                        s_y = compute_period_pnl_summary(ys, ye, ylbl)
-                        if s_y:
-                            yr_summaries.append(s_y)
-                if yr_summaries:
-                    df_yr_all = pd.DataFrame(yr_summaries)
-                    cols_to_show_yr = [
-                        "Περίοδος", "Ραντεβού", "Μικτός Τζίρος (€)", "Καθαρός Τζίρος προ ΦΠΑ (€)",
-                        "Καθαρό Έσοδο / Παραγ. Ώρα (€/h)", "Παραγωγικές Ώρες (h)", "Πληρότητα (%)",
-                        "Συνολική Μισθοδοσία (€)", "Αναλώσιμα Υλικά (€)", "Prime Cost (€)", "Prime Cost (%)",
-                        "Προμήθειες TW (€)", "Πάγια Έξοδα (€)", "Νεκρό Σημείο Τζίρου (€)", "Καθαρό Κέρδος (€)", "Περιθώριο Κέρδους (%)", "Πηγή Εξόδων"
-                    ]
-                    avail_cols_yr = [c for c in cols_to_show_yr if c in df_yr_all.columns]
-                    st.dataframe(df_yr_all[avail_cols_yr], hide_index=True, width="stretch")
-
-            st.space("small")
-
-            with st.container(border=True):
-                st.subheader("📆 Συγκριτικός Πίνακας Όλων των Μηνών", icon=":material/date_range:")
-                mo_summaries = []
-                for m_k, (ms, me, mlbl) in month_options_map.items():
-                    s_m = compute_period_pnl_summary(ms, me, mlbl)
-                    if s_m:
-                        mo_summaries.append(s_m)
-                if mo_summaries:
-                    df_mo_all = pd.DataFrame(mo_summaries)
-                    cols_to_show_mo = [
-                        "Περίοδος", "Ραντεβού", "Μικτός Τζίρος (€)", "Καθαρός Τζίρος προ ΦΠΑ (€)",
-                        "Καθαρό Έσοδο / Παραγ. Ώρα (€/h)", "Παραγωγικές Ώρες (h)", "Πληρότητα (%)",
-                        "Συνολική Μισθοδοσία (€)", "Αναλώσιμα Υλικά (€)", "Prime Cost (€)", "Prime Cost (%)",
-                        "Προμήθειες TW (€)", "Πάγια Έξοδα (€)", "Νεκρό Σημείο Τζίρου (€)", "Καθαρό Κέρδος (€)", "Περιθώριο Κέρδους (%)", "Πηγή Εξόδων"
-                    ]
-                    avail_cols_mo = [c for c in cols_to_show_mo if c in df_mo_all.columns]
-                    st.dataframe(df_mo_all[avail_cols_mo], hide_index=True, width="stretch")
 
 
 # --- ΒΕΛΤΙΣΤΟΠΟΙΗΤΗΣ ΒΑΡΔΙΩΝ & ΟΠΤΙΚΟΣ ΕΝΤΟΠΙΣΜΟΣ IDLE TIME ---
 def render_daily_gantt_idle_detector(df_comp, db_schedules, staff_hourly_lookup, use_rolling_schedule):
     with st.container(border=True):
-        st.subheader("🔬 Οπτικό Ημερήσιο Timeline Ραντεβού vs Βάρδιας (Daily Gantt & Ανίχνευση Κενών)", icon=":material/view_timeline:")
+        st.subheader("🔬 Οπτικό Ημερήσιο Timeline Ραντεβού vs Βάρδιας (Daily Gantt & Ανίχνευση Κενών)", icon=":material/view_timeline:", help="Γράφημα Gantt ραντεβού ανά τεχνίτρια για τη συγκεκριμένη ημέρα. Εντοπίζει με ακρίβεια λεπτού τα πραγματικά κενά (idle) ανάμεσα στα ραντεβού.")
         st.caption(
             "Επιλέξτε οποιαδήποτε ημέρα της περιόδου για να δείτε ακριβώς πότε ξεκίνησε η βάρδια κάθε τεχνίτριας, "
             "ποια ραντεβού εκτέλεσε, και **πού ακριβώς δημιουργήθηκαν τα κόκκινα κενά (νεκρές ώρες)** που κοστίζουν μισθοδοσία."
@@ -4267,7 +3682,7 @@ def render_daily_gantt_idle_detector(df_comp, db_schedules, staff_hourly_lookup,
 
 def render_shift_rebalancing_sandbox(sched_cap_matrix, demand_matrix, active_staff_grid, avg_h_cost=7.80):
     with st.container(border=True):
-        st.subheader("🎛️ Live What-If Προσομοιωτής Ανακατάταξης Βαρδιών (Smart Roster Sandbox)", icon=":material/tune:")
+        st.subheader("🎛️ Live What-If Προσομοιωτής Ανακατάταξης Βαρδιών (Smart Roster Sandbox)", icon=":material/tune:", help="Πειραματιστείτε αλλάζοντας τις ώρες βάρδιας ανά ημέρα για να δείτε ζωντανά την εξοικονόμηση κόστους και την αύξηση πληρότητας.")
         st.caption(
             "Δοκιμάστε **άμεσα και χωρίς ρίσκο** πώς θα άλλαζε το εβδομαδιαίο και μηνιαίο σας κέρδος αν κάνατε ανακατανομή των βαρδιών! "
             "Η προσομοίωση επανυπολογίζει σε πραγματικό χρόνο τις νέες νεκρές ώρες, την εξοικονόμηση μισθοδοσίας και τη νέα πληρότητα."
@@ -4456,7 +3871,7 @@ def render_shift_rebalancing_sandbox(sched_cap_matrix, demand_matrix, active_sta
 
 def render_ai_shift_rebalancer(sched_cap_matrix, demand_matrix, ov_blocks, un_blocks, avg_h_cost, selected_gemini_model, ai_provider_choice, selected_thinking_level, gemini_api_key):
     with st.container(border=True):
-        st.subheader("🤖 AI Smart Rebalancer: Πλάνο Νέου Εβδομαδιαίου Προγράμματος (Gemini 3.8 Flash High Thinking)", icon=":material/psychology:")
+        st.subheader("🤖 AI Smart Rebalancer: Πλάνο Νέου Εβδομαδιαίου Προγράμματος (Gemini 3.8 Flash High Thinking)", icon=":material/psychology:", help="Χρησιμοποιεί τεχνητή νοημοσύνη Gemini για να προτείνει το βέλτιστο εβδομαδιαίο πρόγραμμα βαρδιών εξαλείφοντας τον περιττό νεκρό χρόνο.")
         st.caption(
             "Το AI CFO αναλύει συνδυαστικά τα ακριβή δεδομένα ζήτησης ανά ώρα, εντοπίζει τις κόκκινες ζώνες υπερστελέχωσης "
             "και συντάσσει **συγκεκριμένο νέο εβδομαδιαίο ωράριο ανά ημέρα & κανόνες κρατήσεων στο Treatwell**."
@@ -4532,419 +3947,6 @@ def render_ai_shift_rebalancer(sched_cap_matrix, demand_matrix, ov_blocks, un_bl
             )
             st.markdown(active_plan["report_md"])
 
-
-# =====================================================================
-# TAB 3: ΠΡΟΣΩΠΙΚΟ, IDLE TIME & ΒΕΛΤΙΣΤΟΠΟΙΗΤΗΣ ΒΑΡΔΙΩΝ
-# =====================================================================
-with tab_staff:
-    if df_bookings_db.empty or df_tech_perf.empty:
-        st.info("Δεν υπάρχουν δεδομένα προσωπικού για την επιλεγμένη περίοδο.")
-    else:
-        with st.container(border=True):
-            st.subheader("💶 Ακτινογραφία Μισθοδοσίας Περιόδου (Καθαρά στην Τσέπη vs ΕΦΚΑ/ΦΜΥ vs Κόστος Εργοδότη)", icon=":material/payments:")
-            pm1, pm2, pm3, pm4 = st.columns(4)
-            pm1.metric(
-                "1. Καθαρά στην Τσέπη Εργαζομένων",
-                f"{total_net_pocket_payroll:,.2f} €",
-                "Πληρωτέο ποσό στις εργαζόμενες",
-                delta_color="off",
-                border=True
-            )
-            pm2.metric(
-                "2. ΕΦΚΑ (Εργαζ.+Εργοδ.) & ΦΜΥ",
-                f"{total_efka_tax_payroll:,.2f} €",
-                f"{(total_efka_tax_payroll / max(1.0, total_declared_payroll) * 100):.1f}% του συνολικού κόστους",
-                delta_color="inverse",
-                border=True
-            )
-            pm3.metric(
-                "3. Προσωπικό Άδειας / Υποστήριξης",
-                f"{support_payroll_cost:,.2f} €",
-                "Άδεια / Καθαριότητα / Υποδοχή / Πρακτική",
-                delta_color="off",
-                border=True
-            )
-            pm4.metric(
-                "4. Συνολικό Κόστος Εργοδότη",
-                f"{total_declared_payroll:,.2f} €",
-                f"{payroll_ratio_pct:.1f}% επί του Καθαρού Τζίρου",
-                delta_color="inverse",
-                border=True
-            )
-
-        st.space("small")
-
-        with st.container(border=True):
-            st.subheader("👁️ Οπτική Ακτινογραφία Idle Time ανά Τεχνίτρια (Με μια Ματιά)", icon=":material/timelapse:")
-            st.caption(
-                "Το **Πράσινο** δείχνει πόσες ώρες η τεχνίτρια εξυπηρετούσε πελάτισσα. "
-                "Το **Κόκκινο** δείχνει πόσες ώρες πληρωνόταν στη βάρδια χωρίς ραντεβού (Idle Time)."
-            )
-
-            df_plot_staff = df_tech_perf.sort_values("Ώρες Βάρδιας", ascending=True).copy()
-            fig_idle_bar = go.Figure()
-            fig_idle_bar.add_trace(go.Bar(
-                y=df_plot_staff["Τεχνίτρια"],
-                x=df_plot_staff["Παραγωγικές Ώρες"],
-                name="🟢 Παραγωγικές Ώρες (Σε Ραντεβού)",
-                orientation="h",
-                marker_color="#10b981",
-                text=[f"{p:,.1f}h ({u:.0f}%)" for p, u in zip(df_plot_staff["Παραγωγικές Ώρες"], df_plot_staff["Πληρότητα (%)"])],
-                textposition="inside"
-            ))
-            fig_idle_bar.add_trace(go.Bar(
-                y=df_plot_staff["Τεχνίτρια"],
-                x=df_plot_staff["Νεκρές Ώρες (Idle)"],
-                name="🔴 Νεκρός Χρόνος Αναμονής (Idle)",
-                orientation="h",
-                marker_color="#ef4444",
-                text=[f"{i:,.1f}h κενές (-{c:,.0f}€)" if i > 0 else "" for i, c in zip(df_plot_staff["Νεκρές Ώρες (Idle)"], df_plot_staff["Κόστος Νεκρού Χρόνου (€)"])],
-                textposition="inside"
-            ))
-            fig_idle_bar.update_layout(
-                barmode="stack",
-                height=300,
-                margin=dict(t=15, b=15, l=10, r=10),
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(0,0,0,0)",
-                xaxis=dict(title="Σύνολο Ωρών Βάρδιας στην Περίοδο", ticksuffix=" h"),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
-            )
-            st.plotly_chart(fig_idle_bar, width="stretch")
-
-        st.space("small")
-
-        with st.container(border=True):
-            c_st_h1, c_st_h2 = st.columns([2.5, 1.5], vertical_alignment="center")
-            with c_st_h1:
-                st.subheader("👩‍🔧 Ταμείο, Μισθοδοσία & Παραγωγικότητα ανά Τεχνίτρια", icon=":material/badge:")
-            with c_st_h2:
-                staff_tbl_mode = st.segmented_control(
-                    "Προβολή Πίνακα",
-                    options=["Απλή Προβολή (9 Στήλες)", "Πλήρης Λογιστική Προβολή"],
-                    default="Απλή Προβολή (9 Στήλες)",
-                    key="staff_tbl_mode_ctrl"
-                )
-
-            if staff_tbl_mode.startswith("Απλή"):
-                cols_to_show = [
-                    "Τεχνίτρια", "Ραντεβού", "Ώρες Βάρδιας", "Παραγωγικές Ώρες",
-                    "Πληρότητα (%)", "Καθαρά στην Τσέπη (€)", "ΕΦΚΑ & ΦΜΥ (€)", "Μισθοδοσία (€)", "Πραγματικό Ισοζύγιο (€)"
-                ]
-            else:
-                cols_to_show = [
-                    "Τεχνίτρια", "Ενεργές Εβδ.", "Ραντεβού", "Μικρά Ραντεβού (≤15')",
-                    "Ώρες Βάρδιας", "Παραγωγικές Ώρες", "Νεκρές Ώρες (Idle)", "Πληρότητα (%)",
-                    "Μικτός Τζίρος (€)", "Καθαρός Τζίρος (€)", "Προμήθειες TW (€)", "Υλικά (€)",
-                    "Καθαρά στην Τσέπη (€)", "ΕΦΚΑ & ΦΜΥ (€)", "Μισθοδοσία (€)", "Κόστος Νεκρού Χρόνου (€)", "Πραγματικό Ισοζύγιο (€)"
-                ]
-
-            st.dataframe(
-                df_tech_perf[cols_to_show],
-                hide_index=True,
-                width="stretch",
-                column_config={
-                    "Πληρότητα (%)": st.column_config.ProgressColumn("Πληρότητα %", min_value=0, max_value=100, format="%.1f%%"),
-                    "Καθαρά στην Τσέπη (€)": st.column_config.NumberColumn("Καθαρά Τσέπης (€)", format="%.2f €"),
-                    "ΕΦΚΑ & ΦΜΥ (€)": st.column_config.NumberColumn("ΕΦΚΑ & ΦΜΥ (€)", format="%.2f €"),
-                    "Μισθοδοσία (€)": st.column_config.NumberColumn("Κόστος Εργοδότη (€)", format="%.2f €"),
-                    "Κόστος Νεκρού Χρόνου (€)": st.column_config.NumberColumn("Κόστος Idle (€)", format="%.2f €"),
-                    "Μικτός Τζίρος (€)": st.column_config.NumberColumn("Μικτός (€)", format="%.2f €"),
-                    "Καθαρός Τζίρος (€)": st.column_config.NumberColumn("Καθαρός προ ΦΠΑ (€)", format="%.2f €"),
-                    "Προμήθειες TW (€)": st.column_config.NumberColumn("TW Προμ. (€)", format="%.2f €"),
-                    "Υλικά (€)": st.column_config.NumberColumn("Υλικά (€)", format="%.2f €"),
-                    "Πραγματικό Ισοζύγιο (€)": st.column_config.NumberColumn("Καθαρό Ισοζύγιο (€)", format="%+.2f €")
-                }
-            )
-            if support_staff_details and use_accounting_payroll and include_support_staff:
-                with st.expander(f"📋 Ανάλυση Προσωπικού Άδειας / Υποστήριξης στην Περίοδο ({support_payroll_cost:,.2f} € συνολικό κόστος)"):
-                    st.dataframe(pd.DataFrame(support_staff_details), hide_index=True, width="stretch")
-            st.caption(
-                "💡 **Πώς διαβάζεται το Καθαρό Ισοζύγιο (€):** Είναι ο Καθαρός Τζίρος (προ ΦΠΑ) που έφερε η τεχνίτρια, "
-                "μείον τις προμήθειες Treatwell των ραντεβού της, μείον τα υλικά της, μείον ολόκληρο το εργοδοτικό κόστος μισθοδοσίας της (Καθαρά + ΕΦΚΑ + ΦΜΥ + Δώρα)."
-            )
-
-
-        st.space("small")
-
-        with st.container(border=True):
-            st.subheader("🗓️ Χάρτης Βαρδιών: Ποιες Ημέρες & Ώρες Κάθονται οι Τεχνίτριες;", icon=":material/grid_on:")
-            st.caption(
-                "**Κόκκινα κελιά (+):** Έχετε περισσότερες τεχνίτριες στη βάρδια απ' όσες χρειάζονται τα ραντεβού (Πλεόνασμα / Idle Time). "
-                "**Μπλε κελιά (-):** Η ζήτηση ξεπερνά τις τεχνίτριες της βάρδιας."
-            )
-
-            safe_day_counts = np.maximum(1.0, period_weekday_counts)
-            sched_cap_matrix = period_sched_total_matrix / safe_day_counts
-            active_staff_grid = period_staff_per_hour_grid
-
-            demand_total_matrix = np.zeros((6, 12))
-            for _, r in df_comp.iterrows():
-                dur_h = float(r.get('duration_minutes', 0)) / 60.0
-                if dur_h <= 0:
-                    continue
-                dt_d = r['appointment_date_dt'].weekday()
-                if dt_d > 5:
-                    continue
-                t_parts = str(r.get('appointment_time', '09:00:00')).split(':')
-                st_h = int(t_parts[0]) + (int(t_parts[1]) / 60.0 if len(t_parts) > 1 else 0.0)
-                en_h = st_h + dur_h
-                for h_idx, h in enumerate(range(9, 21)):
-                    ov = max(0.0, min(h + 1.0, en_h) - max(float(h), st_h))
-                    demand_total_matrix[dt_d, h_idx] += ov
-
-            demand_matrix = demand_total_matrix / safe_day_counts
-            excess_matrix = np.round(sched_cap_matrix - demand_matrix, 1)
-            hours_labels = [f"{h:02d}:00" for h in range(9, 21)]
-
-            fig_opt = px.imshow(
-                excess_matrix,
-                x=hours_labels,
-                y=DAYS_GR,
-                color_continuous_scale="RdBu_r",
-                color_continuous_midpoint=0.0,
-                text_auto=True,
-                aspect="auto",
-                labels=dict(x="Ώρα Ημέρας", y="Ημέρα", color="Πλεόνασμα (+) / Έλλειψη (-)")
-            )
-            fig_opt.update_layout(height=330, margin=dict(t=15, b=15, l=10, r=10), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-            st.plotly_chart(fig_opt, width="stretch")
-
-            avg_h_cost = df_staff_db[df_staff_db['hourly_cost'] > 0]['hourly_cost'].mean() if not df_staff_db.empty else 7.5
-            ov_blocks, un_blocks = generate_dynamic_shift_insights(sched_cap_matrix, demand_matrix, active_staff_grid, avg_h_cost)
-
-            st.markdown("##### 🎯 Οι 3 Κυριότερες Προτάσεις Ανακατανομής Βαρδιών")
-            c_o1, c_o2, c_o3 = st.columns(3, gap="medium")
-            with c_o1:
-                if len(ov_blocks) >= 1:
-                    b1 = ov_blocks[0]
-                    st.error(
-                        f"**🔴 #1 Υπερστελέχωση: {b1['Ημέρα']} {b1['Ζώνη Ώρας']}**\n\n"
-                        f"Έχετε **{b1['Μ.Ο. Βάρδιας']} τεχνίτριες** ({b1['Τεχνίτριες στη Βάρδια']}), "
-                        f"ενώ η ζήτηση είναι **{b1['Μ.Ο. Ζήτησης']}** (+{b1['Πλεόνασμα (Τεχν.)']} κάθονται).\n\n"
-                        f"💸 Κόστος: **-{b1['Κόστος/Εβδ. (€)']:,.2f} € / εβδομάδα**"
-                    )
-                else:
-                    st.success("**🟢 Καμία Σοβαρή Υπερστελέχωση**")
-            with c_o2:
-                if len(ov_blocks) >= 2:
-                    b2 = ov_blocks[1]
-                    st.warning(
-                        f"**🟠 #2 Υπερστελέχωση: {b2['Ημέρα']} {b2['Ζώνη Ώρας']}**\n\n"
-                        f"Έχετε **{b2['Μ.Ο. Βάρδιας']} τεχνίτριες** ({b2['Τεχνίτριες στη Βάρδια']}), "
-                        f"ενώ η ζήτηση είναι **{b2['Μ.Ο. Ζήτησης']}** (+{b2['Πλεόνασμα (Τεχν.)']} κάθονται).\n\n"
-                        f"💸 Κόστος: **-{b2['Κόστος/Εβδ. (€)']:,.2f} € / εβδομάδα**"
-                    )
-                else:
-                    st.success("**🟢 Ισορροπημένες Βάρδιες**")
-            with c_o3:
-                if len(un_blocks) >= 1:
-                    u1 = un_blocks[0]
-                    st.info(
-                        f"**🔵 #1 Ζώνη Υψηλής Ζήτησης: {u1['Ημέρα']} {u1['Ζώνη Ώρας']}**\n\n"
-                        f"Στη βάρδια βρίσκονται **{u1['Μ.Ο. Βάρδιας']} τεχνίτριες**, "
-                        f"ενώ η ζήτηση φτάνει τις **{u1['Μ.Ο. Ζήτησης']}** (έλλειμμα **-{u1['Έλλειμμα (Τεχν.)']}**).\n\n"
-                        f"💡 Μεταφέρετε εδώ βάρδια από τις κόκκινες ζώνες!"
-                    )
-                else:
-                    st.success("**🟢 Πλήρης Κάλυψη Αιχμής**")
-
-            with st.expander("📊 Προβολή Αναλυτικής Λίστας Όλων των Ζωνών Υπερστελέχωσης & Έλλειψης"):
-                col_tb1, col_tb2 = st.columns(2)
-                with col_tb1:
-                    st.markdown("**Ζώνες Υπερστελέχωσης (Ταξινομημένες κατά Εβδομαδιαίο Κόστος)**")
-                    if ov_blocks:
-                        st.dataframe(pd.DataFrame(ov_blocks), hide_index=True, width="stretch")
-                with col_tb2:
-                    st.markdown("**Ζώνες Έλλειψης Προσωπικού**")
-                    if un_blocks:
-                        st.dataframe(pd.DataFrame(un_blocks), hide_index=True, width="stretch")
-
-        st.space("small")
-        render_daily_gantt_idle_detector(df_comp, db_schedules, staff_hourly_lookup, use_rolling_schedule)
-
-        st.space("small")
-        render_shift_rebalancing_sandbox(sched_cap_matrix, demand_matrix, active_staff_grid, avg_h_cost)
-
-        st.space("small")
-        render_ai_shift_rebalancer(
-            sched_cap_matrix,
-            demand_matrix,
-            ov_blocks,
-            un_blocks,
-            avg_h_cost,
-            selected_gemini_model,
-            ai_provider_choice,
-            selected_thinking_level,
-            gemini_api_key
-        )
-
-# =====================================================================
-# TAB 3: ΥΠΗΡΕΣΙΕΣ, ΚΑΝΑΛΙΑ TREATWELL & ΠΩΛΗΣΕΙΣ ΛΙΑΝΙΚΗΣ
-# =====================================================================
-with tab_services:
-    if df_bookings_db.empty or srv_matrix.empty:
-        st.info("Δεν υπάρχουν δεδομένα υπηρεσιών για την επιλεγμένη περίοδο.")
-    else:
-        col_top_loss, col_top_win = st.columns(2, gap="medium")
-        with col_top_loss:
-            with st.container(border=True):
-                st.subheader("⚠️ Top 3 Υπηρεσίες Χαμηλότερου Περιθωρίου", icon=":material/trending_down:")
-                st.caption("Αξιολόγηση βάσει πραγματικού κόστους εκτέλεσης (ΦΠΑ, TW, Υλικά, Εργασία Τεχνίτριας & Πάγιο Καρέκλας):")
-                worst_3 = srv_matrix.sort_values(by="Πλήρες_Κέρδος_Ραντεβού", ascending=True).head(3)
-                for _, r_w in worst_3.iterrows():
-                    st.error(
-                        f"**{r_w['raw_service']}** ({int(r_w['Ραντεβού'])} ραντεβού • ~{int(r_w['Μέση_Διάρκεια_Λεπτά'])}')\n\n"
-                        f"• Μικτός Τζίρος: **{r_w['Μικτός_Τζίρος']:,.0f} €** | Άμεσο Κέρδος: **{r_w['Άμεσο_Κέρδος_Ραντεβού']:+,.2f} € / ραντ.**\n"
-                        f"• Μετά το Πάγιο Καρέκλας: **{r_w['Πλήρες_Κέρδος_Ραντεβού']:+,.2f} € / ραντεβού** (Σύνολο: **{r_w['Πλήρες_Καθαρό_Κέρδος']:+,.2f} €**)"
-                    )
-
-        with col_top_win:
-            with st.container(border=True):
-                st.subheader("🏆 Top 3 Πιο Κερδοφόρες Υπηρεσίες", icon=":material/workspace_premium:")
-                st.caption("Οι υπηρεσίες που αφήνουν το μεγαλύτερο καθαρό κέρδος στην επιχείρηση:")
-                best_3 = srv_matrix.sort_values(by="Πλήρες_Καθαρό_Κέρδος", ascending=False).head(3)
-                for _, r_b in best_3.iterrows():
-                    st.success(
-                        f"**{r_b['raw_service']}** ({int(r_b['Ραντεβού'])} ραντεβού • ~{int(r_b['Μέση_Διάρκεια_Λεπτά'])}')\n\n"
-                        f"• Μικτός Τζίρος: **{r_b['Μικτός_Τζίρος']:,.0f} €** | Άμεσο Κέρδος: **{r_b['Άμεσο_Κέρδος_Ραντεβού']:+,.2f} € / ραντ.**\n"
-                        f"• Καθαρό μετά το Πάγιο Καρέκλας: **{r_b['Πλήρες_Κέρδος_Ραντεβού']:+,.2f} € / ραντεβού** (Σύνολο: **{r_b['Πλήρες_Καθαρό_Κέρδος']:+,.2f} €**)"
-                    )
-
-        st.space("small")
-
-        with st.container(border=True):
-            c_sv1, c_sv2 = st.columns([2.4, 1.6], vertical_alignment="center")
-            with c_sv1:
-                st.subheader("💅 Πίνακας Κερδοφορίας ανά Υπηρεσία", icon=":material/table_chart:")
-            with c_sv2:
-                srv_tbl_mode = st.segmented_control(
-                    "Λεπτομέρεια Πίνακα",
-                    options=["Απλή Προβολή (6 Στήλες)", "Πλήρης Κοστολόγηση (11 Στήλες)"],
-                    default="Απλή Προβολή (6 Στήλες)",
-                    key="srv_tbl_mode_ctrl"
-                )
-
-            if srv_tbl_mode == "Απλή Προβολή (6 Στήλες)":
-                srv_cols = [
-                    "raw_service", "Ραντεβού", "Μέση_Διάρκεια_Λεπτά",
-                    "Μικτός_Τζίρος", "Άμεσο_Κέρδος_Ραντεβού", "Πλήρες_Κέρδος_Ραντεβού"
-                ]
-            else:
-                srv_cols = [
-                    "raw_service", "Ραντεβού", "Μέση_Διάρκεια_Λεπτά", "Μικτός_Τζίρος",
-                    "Προμήθειες", "Υλικά", "Εργασία", "Άμεσο_Κέρδος",
-                    "Αναλογία_Παγίων", "Πλήρες_Καθαρό_Κέρδος", "Πλήρες_Κέρδος_Ραντεβού"
-                ]
-
-            st.dataframe(
-                srv_matrix[srv_cols],
-                hide_index=True,
-                width="stretch",
-                column_config={
-                    "raw_service": st.column_config.TextColumn("Υπηρεσία"),
-                    "Μέση_Διάρκεια_Λεπτά": st.column_config.NumberColumn("Διάρκεια (λ.)", format="%d'"),
-                    "Μικτός_Τζίρος": st.column_config.NumberColumn("Μικτός Τζίρος (€)", format="%.2f €"),
-                    "Άμεσο_Κέρδος": st.column_config.NumberColumn("Άμεσο Κέρδος (€)", format="%+.2f €"),
-                    "Άμεσο_Κέρδος_Ραντεβού": st.column_config.NumberColumn("Άμεσο / Ραντ. (€)", format="%+.2f €"),
-                    "Αναλογία_Παγίων": st.column_config.NumberColumn("Αναλογία Παγίων (€)", format="-%.2f €"),
-                    "Πλήρες_Καθαρό_Κέρδος": st.column_config.NumberColumn("Πλήρες Κέρδος (€)", format="%+.2f €"),
-                    "Πλήρες_Κέρδος_Ραντεβού": st.column_config.NumberColumn("Πλήρες / Ραντ. (€)", format="%+.2f €")
-                }
-            )
-
-        st.space("small")
-
-        col_chan, col_ret = st.columns([1.2, 1.2], gap="medium")
-
-        with col_chan:
-            with st.container(border=True):
-                st.subheader("🌐 Κερδοφορία ανά Κανάλι Κράτησης", icon=":material/hub:")
-                chan_grp = df_comp.groupby('channel').agg(
-                    Ραντεβού=('unique_id', 'count'),
-                    Μικτός_Τζίρος=('gross_price', 'sum'),
-                    Προμήθεια_TW=('commission_fee', 'sum'),
-                    Άμεσο_Κέρδος=('net_profit', 'sum')
-                ).reset_index()
-                chan_grp['Κέρδος / Ραντεβού (€)'] = (chan_grp['Άμεσο_Κέρδος'] / chan_grp['Ραντεβού']).round(2)
-                st.dataframe(
-                    chan_grp,
-                    hide_index=True,
-                    width="stretch",
-                    column_config={
-                        "channel": st.column_config.TextColumn("Κανάλι"),
-                        "Μικτός_Τζίρος": st.column_config.NumberColumn("Μικτός (€)", format="%.2f €"),
-                        "Προμήθεια_TW": st.column_config.NumberColumn("Προμήθεια (€)", format="%.2f €"),
-                        "Άμεσο_Κέρδος": st.column_config.NumberColumn("Άμεσο Κέρδος (€)", format="%+.2f €")
-                    }
-                )
-
-                if has_actual_expenses and actual_tw_net > 0:
-                    st.space("small")
-                    tw_diff = round(actual_tw_net - comm_total, 2)
-                    st.html(f"""
-                    <div style="background: rgba(147, 51, 234, 0.05); border: 1px solid rgba(147, 51, 234, 0.25); border-radius: 8px; padding: 12px 14px; font-size: 0.86rem; line-height: 1.6;">
-                        <div style="font-weight: 700; color: #a855f7; margin-bottom: 4px;">🟣 Συμφωνία με Πραγματικό Τιμολόγιο Treatwell:</div>
-                        <div>• Υπολογισμένες Προμήθειες Ραντεβού: <b>{comm_total:,.2f} €</b></div>
-                        <div>• Τιμολόγιο Treatwell (Καθαρή Αξία): <b>{actual_tw_net:,.2f} €</b> (με ΦΠΑ 24%: <b>{actual_tw_gross:,.2f} €</b>)</div>
-                        <div>• Διαφορά Συνδρομής & Processing: <b>+{tw_diff:,.2f} €</b> (Connect SaaS ~39€ + Κόστη επεξεργασίας καρτών)</div>
-                        <div style="color: #10b981; font-weight: 600; margin-top: 6px;">
-                            ✅ Πλήρης συμφωνία! Μόνο η διαφορά (+{tw_diff:,.2f} €) χρεώνεται στα λειτουργικά πάγια. Καμία διπλοχρέωση προμηθειών στο P&L.
-                        </div>
-                    </div>
-                    """)
-
-        with col_ret:
-            with st.container(border=True):
-                st.subheader("🛍️ Πωλήσεις Λιανικής (Retail POS)", icon=":material/shopping_bag:")
-                df_products = df_services_db[df_services_db['category'] == 'Προϊόντα Λιανικής'].copy() if not df_services_db.empty else pd.DataFrame()
-                df_retail_sales = df_comp[df_comp['clean_category'] == 'Προϊόντα Λιανικής'].copy() if not df_comp.empty else pd.DataFrame()
-
-                ret_gross = float(df_retail_sales['gross_price'].sum()) if not df_retail_sales.empty else 0.0
-                ret_cogs = float(df_retail_sales['material_cost'].sum()) if not df_retail_sales.empty else 0.0
-                ret_net = float(df_retail_sales['net_revenue'].sum()) if not df_retail_sales.empty else 0.0
-                ret_profit = ret_net - ret_cogs
-
-                r_m1, r_m2, r_m3 = st.columns(3)
-                r_m1.metric("Τζίρος Λιανικής", f"{ret_gross:,.2f} €", border=True)
-                r_m2.metric("Κόστος (COGS)", f"{ret_cogs:,.2f} €", border=True)
-                r_m3.metric("Καθαρό Κέρδος", f"{ret_profit:+,.2f} €", border=True)
-
-                if not df_products.empty:
-                    with st.expander("➕ Καταχώρηση Νέας Πώλησης Προϊόντος Λιανικής"):
-                        c_pos1, c_pos2, c_pos3 = st.columns([2, 1, 1], vertical_alignment="bottom")
-                        with c_pos1:
-                            sel_prod_name = st.selectbox("Προϊόν", options=df_products['service_name'].tolist(), key="pos_prod_sel")
-                        with c_pos2:
-                            sel_prod_qty = st.number_input("Τεμάχια", min_value=1, max_value=20, value=1, key="pos_prod_qty")
-                        with c_pos3:
-                            if st.button("Καταχώρηση", type="primary", width="stretch", key="btn_pos_add"):
-                                p_row = df_products[df_products['service_name'] == sel_prod_name].iloc[0]
-                                u_price = float(p_row['gross_price']) * sel_prod_qty
-                                u_cost = float(p_row['material_cost_estimate']) * sel_prod_qty
-                                u_net = round(u_price / (1.0 + vat_rate_pct / 100.0), 2)
-                                u_vat = round(u_price - u_net, 2)
-                                now_dt = datetime.now()
-                                uid = f"RET_{now_dt.strftime('%Y%m%d%H%M%S')}_{slugify(sel_prod_name)}"
-                                new_rec = {
-                                    "unique_id": uid, "order_id": uid, "channel": "Direct (Τηλέφωνο)",
-                                    "order_date": now_dt.strftime("%Y-%m-%d %H:%M:%S"),
-                                    "appointment_date": end_d.strftime("%Y-%m-%d"),
-                                    "appointment_time": now_dt.strftime("%H:%M:%S"),
-                                    "staff_name": "Reception / Ταμείο", "customer_name": "ΠΕΛΑΤΗΣ ΛΙΑΝΙΚΗΣ",
-                                    "raw_service": sel_prod_name, "clean_category": "Προϊόντα Λιανικής",
-                                    "duration_minutes": 0, "gross_price": u_price, "vat_amount": u_vat,
-                                    "net_revenue": u_net, "commission_pct": 0.0, "commission_fee": 0.0,
-                                    "material_cost": u_cost, "labor_cost": 0.0, "net_profit": round(u_net - u_cost, 2),
-                                    "status_raw": "Πώληση Λιανικής", "status_group": "COMPLETED", "is_first_visit": False
-                                }
-                                supabase.table("bookings_master").upsert([new_rec]).execute()
-                                st.toast(f"Καταχωρήθηκε πώληση: {sel_prod_qty}x {sel_prod_name}!", icon=":material/check_circle:")
-                                refresh_data()
-
-# =====================================================================
-# TAB 4: ΠΡΟΣΟΜΟΙΩΤΗΣ ΚΕΡΔΟΦΟΡΙΑΣ (@st.fragment) & AI CFO
-# =====================================================================
 @st.fragment
 def render_profitability_simulator(curr_net_profit, curr_idle_cost, curr_net_rev, curr_comm_total, curr_appts_count, p_label):
     with st.container(border=True):
@@ -5002,89 +4004,1273 @@ def render_profitability_simulator(curr_net_profit, curr_idle_cost, curr_net_rev
         fig_sim.update_layout(height=280, margin=dict(t=25, b=10, l=10, r=10), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
         st.plotly_chart(fig_sim, width="stretch")
 
-with tab_sim:
-    if not df_bookings_db.empty:
-        render_profitability_simulator(true_net_profit, idle_labor_cost, net_rev, comm_total, completed_count, period_label)
+# --- 11. ΠΛΟΗΓΗΣΗ 4 ΕΠΙΧΕΙΡΗΣΙΑΚΩΝ HUBS ---
+hub_cfo, hub_staff, hub_services, hub_admin = st.tabs([
+    ":material/monitoring: 📊 1. Οικονομικό Ταμπλό (CFO)",
+    ":material/groups: 👥 2. Ομάδα, Βάρδιες & Idle Time",
+    ":material/spa: 💅 3. Υπηρεσίες, Treatwell & Ταμείο",
+    ":material/settings: ⚙️ 4. Κέντρο Ελέγχου & Ρυθμίσεις"
+])
 
-        st.space("small")
+# =====================================================================
+# HUB 1: ΟΙΚΟΝΟΜΙΚΟ ΤΑΜΠΛΟ (CFO DASHBOARD)
+# =====================================================================
+with hub_cfo:
+    cfo_subview = st.segmented_control(
+        "Πλοήγηση Οικονομικού Ταμπλό",
+        options=[
+            "📊 1. Επισκόπηση & Κανόνας 100€",
+            "⚖️ 2. Σύγκριση Περιόδων (5 Επίπεδα)",
+            "🎛️ 3. Προσομοιωτής & Virtual CFO"
+        ],
+        default="📊 1. Επισκόπηση & Κανόνας 100€",
+        key="cfo_subview_ctrl",
+        help="Επιλέξτε υπο-ενότητα: Επισκόπηση (βασικά KPIs, Κανόνας 100€ & διαγνωστικά), Σύγκριση Περιόδων (Ημέρα με Ημέρα, Εβδομάδα, Μήνας, Έτος ή Custom) ή Προσομοιωτής Κερδοφορίας & Virtual CFO Audit."
+    )
+    st.space("small")
 
-        with st.container(border=True):
-            st.subheader("🧠 Πλήρης Έκθεση Virtual CFO (Gemini Deep Audit — Μόνιμα Αποθηκευμένη στη Βάση)", icon=":material/psychology:")
-            st.caption(
-                "Η τελευταία έκθεση Deep Audit αποθηκεύεται αυτόματα στη βάση δεδομένων (`Supabase`), ώστε **να μη χάνεται ποτέ στο Refresh (F5)** "
-                "και να μην ξαναχρεώνει κλήση στο Gemini μέχρι να πατήσετε ξανά το κουμπί!"
-            )
+    if cfo_subview == "📊 1. Επισκόπηση & Κανόνας 100€":
 
-            if "last_deep_audit" not in st.session_state:
-                saved_audit = load_app_config_json("__LAST_DEEP_AUDIT__")
-                st.session_state["last_deep_audit"] = saved_audit if isinstance(saved_audit, dict) else None
+        if df_bookings_db.empty or df_comp.empty:
+            st.info("Δεν υπάρχουν ολοκληρωμένα ραντεβού για την επιλεγμένη περίοδο. Επιλέξτε άλλη περίοδο με τα βελάκια ◀ / ▶.")
+        else:
+            # 1. Ο ΚΑΝΟΝΑΣ ΤΩΝ 100€ (ΠΟΥ ΠΑΝΕ ΤΑ ΛΕΦΤΑ;)
+            with st.container(border=True):
+                st.subheader("💶 Ο Κανόνας των 100 € — Πού πηγαίνουν τα χρήματα του ταμείου;", icon=":material/payments:", help="Αναλύει κάθε 100€ που εισπράττονται στο ταμείο σε: ΦΠΑ, Προμήθεια Treatwell, Αναλώσιμα Υλικά, Εργασία Ραντεβού, Κόστος Νεκρού Χρόνου, Πάγια Έξοδα και Καθαρό Κέρδος Επιχείρησης.")
+                st.caption(f"Για κάθε **100,00 €** που πληρώνουν οι πελάτισσες στο ταμείο (`{period_label}`), δείτε πώς κατανέμεται ο τζίρος:")
 
-            if st.button("🚀 Εκτέλεση Νέου Βαθέως Οικονομικού Ελέγχου (AI CFO)", type="primary", icon=":material/auto_awesome:"):
+                if gross_rev > 0:
+                    p_vat = (vat_total / gross_rev) * 100.0
+                    p_comm = (comm_total / gross_rev) * 100.0
+                    p_mat = (mat_total / gross_rev) * 100.0
+                    p_prod_lab = (labor_prod_total / gross_rev) * 100.0
+                    p_idle_lab = (idle_labor_cost / gross_rev) * 100.0
+                    p_fixed = (fixed_expenses / gross_rev) * 100.0
+                    p_net = (true_net_profit / gross_rev) * 100.0
+                else:
+                    p_vat = p_comm = p_mat = p_prod_lab = p_idle_lab = p_fixed = p_net = 0.0
+
+                fig_100 = go.Figure()
+                segments_100 = [
+                    ("ΦΠΑ (24%)", p_vat, vat_total, "#64748b"),
+                    ("Προμήθειες Treatwell", p_comm, comm_total, "#f59e0b"),
+                    ("Αναλώσιμα Υλικά", p_mat, mat_total, "#8b5cf6"),
+                    ("Εργασία σε Ραντεβού", p_prod_lab, labor_prod_total, "#3b82f6"),
+                    ("Νεκρός Χρόνος Βαρδιών (Idle)", p_idle_lab, idle_labor_cost, "#ef4444"),
+                    ("Πάγια (Ενοίκιο/ΔΕΚΟ/Λογ.)", p_fixed, fixed_expenses, "#ec4899"),
+                ]
+                for seg_name, seg_pct, seg_eur, seg_col in segments_100:
+                    fig_100.add_trace(go.Bar(
+                        y=["Κατανομή 100€"],
+                        x=[round(seg_pct, 1)],
+                        name=f"{seg_name}: {seg_pct:.1f}€ ({seg_eur:,.0f}€)",
+                        orientation="h",
+                        marker_color=seg_col,
+                        text=[f"{seg_pct:.1f}€" if seg_pct >= 5 else ""],
+                        textposition="inside",
+                        hovertemplate=f"<b>{seg_name}</b><br>{seg_pct:.1f} € ανά 100 € τζίρου<br>Σύνολο: {seg_eur:,.2f} €<extra></extra>"
+                    ))
+                if p_net > 0:
+                    fig_100.add_trace(go.Bar(
+                        y=["Κατανομή 100€"],
+                        x=[round(p_net, 1)],
+                        name=f"Καθαρό Κέρδος: +{p_net:.1f}€ (+{true_net_profit:,.0f}€)",
+                        orientation="h",
+                        marker_color="#10b981",
+                        text=[f"+{p_net:.1f}€" if p_net >= 4 else ""],
+                        textposition="inside"
+                    ))
+                fig_100.update_layout(
+                    barmode="stack",
+                    height=120,
+                    margin=dict(t=5, b=5, l=5, r=5),
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    xaxis=dict(title="Ευρώ ανά 100 € Μικτού Τζίρου", ticksuffix=" €"),
+                    yaxis=dict(showticklabels=False),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
+                )
+                st.plotly_chart(fig_100, width="stretch")
+
+                k1, k2, k3, k4 = st.columns(4)
+                if show_non_calc_direct and period_non_calc_count > 0:
+                    k1.metric(
+                        "1. Μικτός Τζίρος Ταμείου",
+                        f"{gross_rev:,.2f} €",
+                        f"Μη Τιμολ.: +{period_non_calc_val:,.0f} € ({period_non_calc_count} ραντ.) ➔ Δυνητικός: {potential_gross_rev:,.0f} €",
+                        delta_color="off",
+                        border=True,
+                        help="Ο επίσημος μικτός τζίρος που καταγράφηκε στο ταμείο. Εμφανίζονται επιπλέον τα ολοκληρωμένα Direct ραντεβού με τιμή 0€ στην Treatwell και η εκτιμώμενη αξία τους βάσει καταλόγου (Δυνητικός Τζίρος)."
+                    )
+                else:
+                    k1.metric(
+                        "1. Μικτός Τζίρος Ταμείου",
+                        f"{gross_rev:,.2f} €",
+                        f"Καθαρός προ ΦΠΑ: {net_rev:,.2f} € ({completed_count:,} ραντ.)",
+                        delta_color="off",
+                        border=True,
+                        help="Το συνολικό ποσό που πλήρωσαν οι πελάτισσες στο κατάστημα ή online (συμπεριλαμβανομένου ΦΠΑ 24%)."
+                    )
+                k2.metric(
+                    "2. Προμήθειες TW & Υλικά",
+                    f"-{(comm_total + mat_total):,.2f} €",
+                    f"TW: -{comm_total:,.0f} € ({p_comm:.1f}%) | Υλικά: -{mat_total:,.0f} €",
+                    delta_color="inverse",
+                    border=True,
+                    help="Το άμεσο μεταβλητό κόστος των ραντεβού: προμήθειες κρατήσεων Treatwell και αναλώσιμα υλικά (gel, ημιμόνιμα, αναλώσιμα φροντίδας)."
+                )
+                k3.metric(
+                    "3. Μισθοδοσία & Πάγια",
+                    f"-{(total_declared_payroll + fixed_expenses):,.2f} €",
+                    f"Μισθοί: -{total_declared_payroll:,.0f} € (Idle: -{idle_labor_cost:,.0f} €) | Πάγια: -{fixed_expenses:,.0f} €",
+                    delta_color="inverse",
+                    border=True,
+                    help="Τα λειτουργικά έξοδα περιόδου: συνολικό κόστος μισθοδοσίας εργοδότη (συμπεριλαμβανομένου κόστους νεκρού χρόνου idle) συν τα πάγια έξοδα (ενοίκιο, λογαριασμοί, λογιστής, συνδρομές)."
+                )
+                k4.metric(
+                    "4. Τελικό Καθαρό Αποτέλεσμα",
+                    f"{true_net_profit:+,.2f} €",
+                    f"{p_net:+.1f} € ανά 100 € τζίρου (Πληρότητα {overall_occ_pct:.1f}%)",
+                    delta_color="normal" if true_net_profit >= 0 else "inverse",
+                    border=True,
+                    help="Το πραγματικό καθαρό κέρδος (ή ζημιά) της επιχείρησης μετά την αφαίρεση όλων των εξόδων: ΦΠΑ, προμηθειών Treatwell, αναλωσίμων υλικών, μισθοδοσίας και παγίων."
+                )
+
+            st.space("small")
+
+            # --- ΕΙΔΙΚΗ ΕΝΟΤΗΤΑ CFO: PRIME COST, BREAK-EVEN & ΔΟΜΗ ΕΞΟΔΩΝ ---
+            with st.container(border=True):
+                st.markdown("##### 🎯 Στρατηγικοί Δείκτες CFO: Prime Cost, Νεκρό Σημείο & Ταμειακή Ροή Εξόδων")
+                col_strat1, col_strat2, col_strat3 = st.columns(3, gap="medium")
+                with col_strat1:
+                    prime_status = "🟢 Υγιές (<55%)" if prime_cost_pct <= 55.0 else ("🟠 Οριακό (55%-62%)" if prime_cost_pct <= 62.0 else "🔴 Υψηλό (>62%)")
+                    st.metric(
+                        "Prime Cost (Μισθοδοσία + Υλικά)",
+                        f"{prime_cost:,.2f} €",
+                        f"{prime_cost_pct:.1f}% του καθαρού ({prime_status})",
+                        delta_color="off",
+                        border=True,
+                        help="Το Prime Cost είναι το άθροισμα μισθοδοσίας και αναλωσίμων. Στον κλάδο της ομορφιάς/νυχιών, το βέλτιστο όριο είναι 45%–55% του καθαρού τζίρου."
+                    )
+                with col_strat2:
+                    be_margin_eur = round(net_rev - break_even_rev, 2)
+                    st.metric(
+                        "Νεκρό Σημείο Τζίρου (Break-Even)",
+                        f"{break_even_rev:,.2f} €",
+                        f"{be_margin_eur:+,.2f} € περιθώριο ασφαλείας" if net_rev > 0 else "0.00 €",
+                        delta_color="normal" if be_margin_eur >= 0 else "inverse",
+                        border=True,
+                        help="Ο καθαρός τζίρος που απαιτείται ώστε τα έσοδα να καλύψουν ακριβώς τη μισθοδοσία και τα πάγια λειτουργικά έξοδα."
+                    )
+                with col_strat3:
+                    be_appts_diff = completed_count - break_even_appts
+                    st.metric(
+                        "Ελάχιστα Ραντεβού Νεκρού Σημείου",
+                        f"{break_even_appts:,} ραντεβού",
+                        f"{be_appts_diff:+,} έναντι πραγματικών ({completed_count:,})" if completed_count > 0 else "0 ραντ.",
+                        delta_color="normal" if be_appts_diff >= 0 else "inverse",
+                        border=True,
+                        help="Ο αριθμός ολοκληρωμένων ραντεβού που χρειάζονται για να μηδενιστεί η ζημιά. Κάθε επιπλέον ραντεβού παράγει καθαρό κέρδος."
+                    )
+
+                # Υπο-ενότητα Δομής Εξόδων & Ταμειακής Ροής
+                col_exp_viz, col_exp_cf = st.columns([1.25, 1.15], gap="medium")
+                with col_exp_viz:
+                    if has_actual_expenses:
+                        st.caption("📊 **Πραγματικά Έξοδα Περιόδου ανά Κατηγορία (expenses_ledger)**")
+                        cat_items = sorted(exp_by_cat.items(), key=lambda x: x[1], reverse=True)
+                        fig_exp_cat = go.Figure(go.Pie(
+                            labels=[k for k, _ in cat_items],
+                            values=[v for _, v in cat_items],
+                            hole=0.45,
+                            textinfo="percent+label",
+                            marker=dict(colors=["#3b82f6", "#10b981", "#f59e0b", "#8b5cf6", "#ec4899", "#64748b"])
+                        ))
+                        fig_exp_cat.update_layout(height=240, margin=dict(t=10, b=10, l=10, r=10), showlegend=False, paper_bgcolor="rgba(0,0,0,0)")
+                        st.plotly_chart(fig_exp_cat, width="stretch")
+                    else:
+                        st.caption("🏢 **Προϋπολογιστικά Πάγια Περιόδου (expenses_log)**")
+                        st.info(
+                            f"💡 Για την περίοδο `{period_label}` υπολογίζονται προϋπολογιστικά πάγια **{fixed_expenses:,.2f} €** "
+                            f"(βάσει του μηνιαίου προϋπολογισμού {monthly_fixed:,.2f} €). "
+                            f"Καταχωρήστε τα πραγματικά τιμολόγια στην **Καρτέλα 5 (Διαχείριση)** για πλήρη λογιστική ακρίβεια!",
+                            icon=":material/info:"
+                        )
+                with col_exp_cf:
+                    st.caption("💶 **Ταμειακή Ροή, Εκκαθάριση ΦΠΑ & Ταμείο Περιόδου**")
+                    net_vat_due = round(vat_total - period_vat_expenses, 2)
+                    cash_wages_pocket = total_net_pocket_payroll
+                    tot_cash_outflow = round(cash_wages_pocket + period_gross_expenses, 2) if has_actual_expenses else round(total_all_costs * 1.15, 2)
+                    real_cash_pocket = round(gross_rev - tot_cash_outflow, 2)
+                    st.html(f"""
+                    <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(148,163,184,0.2); border-radius: 8px; padding: 12px 16px; font-size: 0.90rem; line-height: 1.6;">
+                        <div>• Καθαρά Έξοδα Τιμολογίων: <b>{period_net_expenses:,.2f} €</b> | ΦΠΑ Εισροών: <b style="color:#10b981;">+{period_vat_expenses:,.2f} €</b></div>
+                        <div>• Πληρωμές Τιμολογίων & Φόρων (με ΦΠΑ): <b style="color:#ef4444;">-{period_gross_expenses:,.2f} €</b></div>
+                        <div>• Πληρωμές Καθαρών Μισθών: <b style="color:#ef4444;">-{cash_wages_pocket:,.2f} €</b></div>
+                        <hr style="margin: 8px 0; border: none; border-top: 1px solid rgba(148,163,184,0.2);">
+                        <div>• ΦΠΑ Εσόδων: <b>{vat_total:,.2f} €</b> | <b>Εκτιμώμενος ΦΠΑ προς Απόδοση:</b> <b style="color:{'#f59e0b' if net_vat_due > 0 else '#10b981'};">{net_vat_due:,.2f} €</b></div>
+                        <div>• <b>Πραγματικό Ταμειακό Περίσσευμα (Cash Surplus):</b> <b style="color:{'#10b981' if real_cash_pocket > 0 else '#ef4444'}; font-size: 1.02rem;">{real_cash_pocket:+,.2f} €</b></div>
+                        <div style="font-size: 0.78rem; opacity: 0.8; margin-top: 4px;">Πηγή Εξόδων: <b>{'🟢 Πραγματικά Τιμολόγια (expenses_ledger)' if has_actual_expenses else '🟠 Προϋπολογισμός (expenses_log)'}</b></div>
+                    </div>
+                    """)
+
+            st.space("small")
+
+            # 2. ΥΒΡΙΔΙΚΗ ΜΗΧΑΝΗ ΔΙΑΓΝΩΣΗΣ (ΜΕΡΟΣ Α: ΔΥΝΑΜΙΚΕΣ ΚΑΡΤΕΣ ΙΕΡΑΡΧΗΜΕΝΕΣ ΣΕ ΕΥΡΩ + ΥΓΙΕΙΣ ΔΕΙΚΤΕΣ)
+            all_diagnostics = build_dynamic_cfo_diagnostics()
+            wounds_cnt = sum(1 for d in all_diagnostics if d["severity_rank"] > 0)
+
+            col_diag_h1, col_diag_h2 = st.columns([2.7, 1.3], vertical_alignment="center")
+            with col_diag_h1:
+                if wounds_cnt > 0:
+                    st.subheader(f"🔍 Δυναμική Διάγνωση Περιόδου ({wounds_cnt} Πληγές Κέρδους — Ιεραρχημένες σε Ευρώ)", icon=":material/troubleshoot:")
+                else:
+                    st.subheader("🟢 Δυναμική Διάγνωση Περιόδου — Όλοι οι Δείκτες Υγιείς!", icon=":material/verified:")
+            with col_diag_h2:
+                ai_btn_clicked = st.button(
+                    "✨ Σύνθεση AI CFO γι' αυτή την Περίοδο",
+                    type="primary",
+                    icon=":material/auto_awesome:",
+                    width="stretch",
+                    key="btn_hybrid_ai_tab1"
+                )
+
+            top_3_cards = all_diagnostics[:3]
+            col_pk1, col_pk2, col_pk3 = st.columns(3, gap="medium")
+            for idx_c, (col_obj, d_card) in enumerate(zip([col_pk1, col_pk2, col_pk3], top_3_cards)):
+                with col_obj:
+                    rank_prefix = f"#{idx_c + 1} " if d_card["severity_rank"] > 0 else ""
+                    st.html(f"""
+                    <div class="cfo-card {d_card['css_class']}">
+                        <div style="font-size:0.78rem; text-transform:uppercase; letter-spacing:0.04em; opacity:0.85; margin-bottom:4px;">
+                            {d_card['badge']}
+                        </div>
+                        <b style="font-size:1.02rem;">{rank_prefix}{d_card['title']}</b><br><br>
+                        {d_card['body']}<br><br>
+                        👉 <i>{d_card['action']}</i>
+                    </div>
+                    """)
+
+            if len(all_diagnostics) > 3:
+                with st.expander(f"📋 Προβολή και των {len(all_diagnostics)} Δυναμικών Δεικτών της Περιόδου ({period_label})"):
+                    rem_cols = st.columns(min(3, len(all_diagnostics) - 3), gap="medium")
+                    for idx_r, d_rem in enumerate(all_diagnostics[3:]):
+                        with rem_cols[idx_r % len(rem_cols)]:
+                            st.html(f"""
+                            <div class="cfo-card {d_rem['css_class']}">
+                                <div style="font-size:0.78rem; text-transform:uppercase; opacity:0.85; margin-bottom:4px;">{d_rem['badge']}</div>
+                                <b>{d_rem['title']}</b><br><br>
+                                {d_rem['body']}<br><br>
+                                👉 <i>{d_rem['action']}</i>
+                            </div>
+                            """)
+
+            # ΜΕΡΟΣ Β ΤΗΣ ΥΒΡΙΔΙΚΗΣ ΜΗΧΑΝΗΣ: ΕΞΑΤΟΜΙΚΕΥΜΕΝΕΣ ΚΑΡΤΕΣ AI CFO (ΜΟΝΙΜΗ ΑΠΟΘΗΚΕΥΣΗ ΣΤΗ ΒΑΣΗ & CACHE)
+            if "hybrid_ai_cache" not in st.session_state:
+                saved_hybrid_db = load_app_config_json("__LAST_HYBRID_CARDS__")
+                st.session_state["hybrid_ai_cache"] = saved_hybrid_db if isinstance(saved_hybrid_db, dict) else {}
+
+            cache_key_period = f"{start_d}_{end_d}_{completed_count}_{round(true_net_profit, 0)}"
+            if ai_btn_clicked:
                 if not gemini_api_key:
                     st.error(f"Συμπληρώστε πρώτα το API Key ({ai_provider_choice}) στην Πλαϊνή Μπάρα (αριστερά)!")
                 elif GENAI_AVAILABLE or ai_provider_choice != "Google Gemini":
-                    with st.spinner(f"Ο Virtual CFO ({selected_gemini_model}) αναλύει τα οικονομικά δεδομένα της περιόδου και αποθηκεύει την έκθεση στη βάση..."):
+                    with st.spinner(f"Ο AI CFO ({selected_gemini_model}) συνδυάζει βάρδιες, υπηρεσίες και τεχνίτριες για την περίοδο {period_label}..."):
                         try:
-                            ai_payload = {
+                            ai_summary_payload = {
                                 "period": period_label,
-                                "weeks_covered": len(period_weeks_seen),
-                                "exact_schedule_weeks": len(period_exact_weeks_seen),
-                                "gross_revenue": round(float(gross_rev), 2),
-                                "net_revenue": round(float(net_rev), 2),
-                                "net_revenue_per_productive_hour": round(float(net_per_prod_h), 2),
-                                "treatwell_commissions": round(float(comm_total), 2),
-                                "materials": round(float(mat_total), 2),
-                                "productive_labor": round(float(labor_prod_total), 2),
-                                "idle_labor_cost": round(float(idle_labor_cost), 2),
-                                "fixed_expenses": round(float(fixed_expenses), 2),
-                                "true_net_profit": round(float(true_net_profit), 2),
-                                "technician_occupancy_pct": round(float(overall_occ_pct), 1),
-                                "staff_breakdown": df_tech_perf.to_dict(orient="records") if not df_tech_perf.empty else [],
-                                "worst_services": srv_matrix.sort_values(by="Πλήρες_Καθαρό_Κέρδος", ascending=True).head(5)[
-                                    ["raw_service", "Ραντεβού", "Μικτός_Τζίρος", "Καθαρό_Έσοδο_Ώρας", "Άμεσο_Κέρδος", "Πλήρες_Καθαρό_Κέρδος"]
+                                "appointments_completed": completed_count,
+                                "cancelled": len(df_cancelled),
+                                "no_shows": len(df_noshow),
+                                "gross_revenue": round(gross_rev, 2),
+                                "net_revenue": round(net_rev, 2),
+                                "net_revenue_per_productive_hour": round(net_per_prod_h, 2),
+                                "treatwell_commissions": round(comm_total, 2),
+                                "materials_cost": round(mat_total, 2),
+                                "productive_labor_cost": round(labor_prod_total, 2),
+                                "idle_labor_cost": round(idle_labor_cost, 2),
+                                "fixed_expenses": round(fixed_expenses, 2),
+                                "true_net_profit": round(true_net_profit, 2),
+                                "occupancy_pct": round(overall_occ_pct, 1),
+                                "staff_performance": df_tech_perf[[
+                                    "Τεχνίτρια", "Ραντεβού", "Ώρες Βάρδιας", "Παραγωγικές Ώρες",
+                                    "Νεκρές Ώρες (Idle)", "Πληρότητα (%)", "Πραγματικό Ισοζύγιο (€)"
+                                ]].to_dict(orient="records") if not df_tech_perf.empty else [],
+                                "lowest_margin_services": srv_matrix.sort_values("Πλήρες_Καθαρό_Κέρδος").head(4)[
+                                    ["raw_service", "Ραντεβού", "Μικτός_Τζίρος", "Καθαρό_Έσοδο_Ώρας", "Πλήρες_Κέρδος_Ραντεβού"]
+                                ].to_dict(orient="records") if not srv_matrix.empty else [],
+                                "highest_margin_services": srv_matrix.sort_values("Πλήρες_Καθαρό_Κέρδος", ascending=False).head(3)[
+                                    ["raw_service", "Ραντεβού", "Μικτός_Τζίρος", "Καθαρό_Έσοδο_Ώρας", "Πλήρες_Κέρδος_Ραντεβού"]
                                 ].to_dict(orient="records") if not srv_matrix.empty else []
                             }
-                            prompt_cfo = f"""
-                            Είσαι ο Οικονομικός Διευθυντής (CFO) του Nail Salon.
-                            Ανάλυσε τα παρακάτω οικονομικά δεδομένα της περιόδου ({period_label}) και δώσε σε καθαρά Ελληνικά:
-                            1. Ακριβή διάγνωση γιατί το κατάστημα έχει αυτό το καθαρό αποτέλεσμα ενώ κάνει υψηλό τζίρο (εστίασε ιδιαίτερα στο καθαρό έσοδο ανά παραγωγική ώρα στις βασικές υπηρεσίες Ημιμόνιμο/Gel vs κόστος ώρας).
-                            2. Τις 4 πιο αποδοτικές κινήσεις (ανατιμήσεις συγκεκριμένων υπηρεσιών, μείωση διάρκειας, Treatwell re-booking, βάρδιες ανά τεχνίτρια) με ακριβή εκτίμηση ευρώ.
-                            ΔΕΔΟΜΕΝΑ: {json.dumps(ai_payload, ensure_ascii=False)}
+                            prompt_hybrid = f"""
+                            Είσαι ο Senior CFO του Nail Salon. Έχεις μπροστά σου τα ακριβή μαθηματικά δεδομένα της περιόδου: {period_label}.
+                            ΜΗΝ επαναλάβεις απλώς τα νούμερα. Κάνε ΣΥΝΔΥΑΣΤΙΚΗ σκέψη (εστίασε στο χαμηλό καθαρό έσοδο ανά παραγωγική ώρα στις βασικές υπηρεσίες Ημιμόνιμο/Gel, ποιες υπηρεσίες χαλάνε τον χρόνο, ποιες τεχνίτριες έχουν αρνητικό ισοζύγιο και πώς κινήθηκε το Treatwell).
+                            Επέστρεψε ΑΠΟΚΛΕΙΣΤΙΚΑ έγκυρο JSON (λίστα με 3 αντικείμενα) με την εξής δομή:
+                            [
+                              {{
+                                "title": "Σύντομος τίτλος εύρηματος/δράσης #1",
+                                "Finding": "2-3 προτάσεις συνδυαστικής διάγνωσης με ονόματα τεχνιτριών/υπηρεσιών της περιόδου",
+                                "Action": "Συγκεκριμένη λύση και εκτιμώμενο όφελος σε Ευρώ"
+                              }},
+                              ... (3 κάρτες συνολικά)
+                            ]
+                            ΔΕΔΟΜΕΝΑ: {json.dumps(ai_summary_payload, ensure_ascii=False)}
                             """
-                            resp_txt, used_m = call_gemini_smart(
+                            raw_ai_json, used_m = call_gemini_smart(
                                 api_key=gemini_api_key,
-                                contents=prompt_cfo,
-                                expect_json=False,
+                                contents=prompt_hybrid,
+                                expect_json=True,
                                 preferred_model=selected_gemini_model,
                                 provider=ai_provider_choice,
                                 thinking_level=selected_thinking_level
                             )
-                            audit_obj = {
-                                "period": period_label,
-                                "model": used_m,
-                                "ts": datetime.now().strftime("%d/%m/%Y %H:%M"),
-                                "report_md": resp_txt
-                            }
-                            st.session_state["last_deep_audit"] = audit_obj
-                            save_app_config_json("__LAST_DEEP_AUDIT__", audit_obj)
-                            st.toast("Η έκθεση Deep Audit αποθηκεύτηκε μόνιμα στη βάση!", icon=":material/check_circle:")
+                            parsed_cards = clean_json_response(raw_ai_json)
+                            if isinstance(parsed_cards, list) and len(parsed_cards) > 0:
+                                st.session_state["hybrid_ai_cache"][cache_key_period] = {
+                                    "cards": parsed_cards,
+                                    "model": used_m,
+                                    "period": period_label,
+                                    "ts": datetime.now().strftime("%d/%m/%Y %H:%M")
+                                }
+                                save_app_config_json("__LAST_HYBRID_CARDS__", st.session_state["hybrid_ai_cache"])
                         except Exception as e:
-                            st.error(f"Σφάλμα AI API: {e}")
+                            st.error(f"Σφάλμα κατά την κλήση του Gemini AI: {e}")
 
-            active_audit = st.session_state.get("last_deep_audit")
-            if isinstance(active_audit, dict) and active_audit.get("report_md"):
-                st.divider()
-                st.info(
-                    f"📌 **Αποθηκευμένη Έκθεση Deep Audit** • Περίοδος Ανάλυσης: **`{active_audit.get('period', '-')}`** • "
-                    f"Ημερομηνία: `{active_audit.get('ts', '-')}` • Μοντέλο: `{active_audit.get('model', '-')}`",
-                    icon=":material/bookmark_added:"
+            if cache_key_period in st.session_state["hybrid_ai_cache"]:
+                cached_entry = st.session_state["hybrid_ai_cache"][cache_key_period]
+                if isinstance(cached_entry, dict):
+                    ai_cards_list = cached_entry.get("cards", [])
+                    ai_model_used = cached_entry.get("model", "")
+                    ai_ts = cached_entry.get("ts", "")
+                else:
+                    ai_cards_list, ai_model_used = cached_entry
+                    ai_ts = ""
+                st.markdown(f"##### 🧠 Συνδυαστικό Σχέδιο Δράσης AI CFO για `{period_label}` *(Μοντέλο: `{ai_model_used}` {f'• Αποθηκεύτηκε: {ai_ts}' if ai_ts else ''})*")
+                ai_cols = st.columns(min(3, len(ai_cards_list)), gap="medium")
+                for idx_ai, c_item in enumerate(ai_cards_list[:3]):
+                    with ai_cols[idx_ai]:
+                        st.html(f"""
+                        <div class="cfo-card cfo-card-purple">
+                            <div style="font-size:0.76rem; text-transform:uppercase; opacity:0.85; margin-bottom:4px;">✨ AI CFO Σύσταση #{idx_ai+1}</div>
+                            <b style="font-size:1.0rem;">{c_item.get('title', '')}</b><br><br>
+                            {c_item.get('Finding', '')}<br><br>
+                            🎯 <b>Δράση & Όφελος:</b> <i>{c_item.get('Action', '')}</i>
+                        </div>
+                        """)
+
+            st.space("small")
+
+            # 3. ΚΑΤΑΡΡΑΚΤΗΣ P&L & ΧΡΟΝΙΚΗ ΕΞΕΛΙΞΗ (ΔΙΠΛΑ-ΔΙΠΛΑ)
+            col_ch1, col_ch2 = st.columns([1.1, 1.2], gap="medium")
+
+            with col_ch1:
+                with st.container(border=True):
+                    st.subheader("📉 Καταρράκτης Κερδοφορίας (P&L Bridge)", icon=":material/waterfall_chart:", help="Οπτική απεικόνιση των διαδοχικών αφαιρέσεων από τον μικτό τζίρο μέχρι το τελικό πραγματικό καθαρό κέρδος.")
+                    fig_water = go.Figure(go.Waterfall(
+                        orientation="v",
+                        measure=["absolute", "relative", "total", "relative", "relative", "relative", "total", "relative", "relative", "total"],
+                        x=[
+                            "Μικτός Τζίρος", "ΦΠΑ (-24%)", "Καθαρός Τζίρος",
+                            "Προμήθειες TW", "Υλικά", "Εργασία Ραντεβού",
+                            "Κέρδος Ραντεβού", "Νεκρός Χρόνος", "Πάγια Έξοδα", "Τελικό Αποτέλεσμα"
+                        ],
+                        y=[
+                            gross_rev, -vat_total, 0,
+                            -comm_total, -mat_total, -labor_prod_total,
+                            0, -idle_labor_cost, -fixed_expenses, 0
+                        ],
+                        connector={"line": {"color": "#64748b", "width": 1.5}},
+                        decreasing={"marker": {"color": "#ef4444"}},
+                        increasing={"marker": {"color": "#10b981"}},
+                        totals={"marker": {"color": "#3b82f6"}}
+                    ))
+                    fig_water.update_layout(height=360, margin=dict(t=20, b=20, l=10, r=10), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+                    st.plotly_chart(fig_water, width="stretch")
+
+            with col_ch2:
+                with st.container(border=True):
+                    use_monthly_trend = (end_d - start_d).days > 75
+                    st.subheader(
+                        f"📈 Εξέλιξη ανά {'Μήνα' if use_monthly_trend else 'Εβδομάδα'} (Τζίρος vs Μισθοί vs Κέρδος)",
+                        icon=":material/trending_up:"
+                    )
+                    if use_monthly_trend:
+                        df_comp['ym_str'] = df_comp['appointment_date_dt'].dt.strftime('%Y-%m')
+                        tr_grp = df_comp.groupby('ym_str').agg(
+                            Καθαρός_Τζίρος=('net_revenue', 'sum'),
+                            Προμήθειες=('commission_fee', 'sum'),
+                            Υλικά=('material_cost', 'sum'),
+                            Εργασία_Ραντεβού=('labor_cost', 'sum')
+                        ).reset_index().sort_values('ym_str')
+                        mo_pay = {}
+                        for m_str, pay_val in daily_payroll_by_monday.items():
+                            ym_k = m_str[:7]
+                            mo_pay[ym_k] = mo_pay.get(ym_k, 0.0) + pay_val
+                        mo_pay_list = []
+                        for _, r in tr_grp.iterrows():
+                            ym_s = str(r['ym_str'])
+                            if use_accounting_payroll:
+                                yr_i, mo_i = int(ym_s[:4]), int(ym_s[5:7])
+                                ms_d = max(start_d, date(yr_i, mo_i, 1))
+                                me_d = min(end_d, date(yr_i, 12, 31) if mo_i == 12 else (date(yr_i, mo_i + 1, 1) - timedelta(days=1)))
+                                ec_m, _, sc_m, _, _ = compute_accounting_payroll_for_period(ms_d, me_d)
+                                tot_m_pay = sum(ec_m.values()) - (0.0 if include_support_staff else sc_m)
+                                mo_pay_list.append(round(max(float(r['Εργασία_Ραντεβού']), tot_m_pay), 2))
+                            else:
+                                mo_pay_list.append(round(max(float(r['Εργασία_Ραντεβού']), float(mo_pay.get(ym_s, 0.0))), 2))
+                        tr_grp['Μισθοδοσία_Βαρδιών'] = mo_pay_list
+                        tr_grp['Πάγια'] = round(monthly_fixed, 2)
+                        tr_grp['Καθαρό_Κέρδος'] = (
+                            tr_grp['Καθαρός_Τζίρος'] - tr_grp['Προμήθειες'] - tr_grp['Υλικά'] - tr_grp['Μισθοδοσία_Βαρδιών'] - tr_grp['Πάγια']
+                        ).round(2)
+                        x_col_tr = 'ym_str'
+                    else:
+                        tr_grp = df_comp.groupby('monday_date_str').agg(
+                            Καθαρός_Τζίρος=('net_revenue', 'sum'),
+                            Προμήθειες=('commission_fee', 'sum'),
+                            Υλικά=('material_cost', 'sum'),
+                            Εργασία_Ραντεβού=('labor_cost', 'sum')
+                        ).reset_index().sort_values('monday_date_str')
+                        wk_pay_list = []
+                        for _, r in tr_grp.iterrows():
+                            m_s_w = str(r['monday_date_str'])
+                            if use_accounting_payroll:
+                                ws_d = max(start_d, datetime.strptime(m_s_w, "%Y-%m-%d").date())
+                                we_d = min(end_d, ws_d + timedelta(days=6))
+                                ec_w, _, sc_w, _, _ = compute_accounting_payroll_for_period(ws_d, we_d)
+                                tot_w_pay = sum(ec_w.values()) - (0.0 if include_support_staff else sc_w)
+                                wk_pay_list.append(round(max(float(r['Εργασία_Ραντεβού']), tot_w_pay), 2))
+                            else:
+                                wk_pay_list.append(round(max(float(r['Εργασία_Ραντεβού']), float(daily_payroll_by_monday.get(m_s_w, 0.0))), 2))
+                        tr_grp['Μισθοδοσία_Βαρδιών'] = wk_pay_list
+                        tr_grp['Πάγια'] = tr_grp['monday_date_str'].apply(
+                            lambda m: round(monthly_fixed * (7.0 / 30.4375), 2) if wk_counts.get(m, 0) >= 25 else round(monthly_fixed * (3.0 / 30.4375), 2)
+                        )
+                        tr_grp['Καθαρό_Κέρδος'] = (
+                            tr_grp['Καθαρός_Τζίρος'] - tr_grp['Προμήθειες'] - tr_grp['Υλικά'] - tr_grp['Μισθοδοσία_Βαρδιών'] - tr_grp['Πάγια']
+                        ).round(2)
+                        x_col_tr = 'monday_date_str'
+
+                    fig_tr = go.Figure()
+                    fig_tr.add_trace(go.Bar(x=tr_grp[x_col_tr], y=tr_grp['Καθαρός_Τζίρος'], name="Καθαρός Τζίρος (προ ΦΠΑ)", marker_color="#38bdf8"))
+                    fig_tr.add_trace(go.Bar(x=tr_grp[x_col_tr], y=tr_grp['Μισθοδοσία_Βαρδιών'], name="Συνολική Μισθοδοσία Εργοδότη", marker_color="#f59e0b"))
+                    fig_tr.add_trace(go.Scatter(
+                        x=tr_grp[x_col_tr], y=tr_grp['Καθαρό_Κέρδος'],
+                        name="Καθαρό Αποτέλεσμα (€)",
+                        mode="lines+markers+text",
+                        text=[f"{v:+.0f}€" for v in tr_grp['Καθαρό_Κέρδος']],
+                        textposition="top center",
+                        line=dict(color="#10b981", width=3)
+                    ))
+                    fig_tr.update_layout(
+                        barmode="group", height=360, margin=dict(t=20, b=20, l=10, r=10),
+                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
+                    )
+                    st.plotly_chart(fig_tr, width="stretch")
+    elif cfo_subview == "⚖️ 2. Σύγκριση Περιόδων (5 Επίπεδα)":
+
+        if df_bookings_db.empty:
+            st.info("Δεν υπάρχουν δεδομένα στη βάση για σύγκριση περιόδων.")
+        else:
+            comp_mode = st.segmented_control(
+                "Επιλέξτε Τρόπο Σύγκρισης Περιόδων",
+                options=[
+                    "⚖️ 1. Σύγκριση 2 Περιόδων Δίπλα-Δίπλα (Περίοδος Α vs Περίοδος Β)",
+                    "📊 2. Συγκριτικός Πίνακας Όλων των Ετών & Μηνών"
+                ],
+                default="⚖️ 1. Σύγκριση 2 Περιόδων Δίπλα-Δίπλα (Περίοδος Α vs Περίοδος Β)",
+                key="comp_tab_mode"
+            )
+
+            st.space("small")
+
+            if comp_mode.startswith("⚖️"):
+                with st.container(border=True):
+                    st.subheader("⚖️ Σύγκριση 2 Περιόδων Δίπλα-Δίπλα (Μήνες, Έτη ή Εβδομάδες)", icon=":material/compare_arrows:")
+                    gran_choice = st.segmented_control(
+                        "Επίπεδο Σύγκρισης Περιόδων",
+                        options=["☀️ Ανά Ημέρα", "🗓️ Ανά Εβδομάδα", "📆 Ανά Μήνα", "📅 Ανά Έτος", "🎯 Custom Εύρος"],
+                        default="📆 Ανά Μήνα",
+                        key="comp_gran_choice_sc",
+                        help="Επιλέξτε τη στάθμη σύγκρισης: Ημέρα με Ημέρα, Εβδομάδα με Εβδομάδα, Μήνας με Μήνα, Έτος με Έτος ή Προσαρμοσμένο Εύρος."
+                    )
+                    st.space("small")
+                    c_pa, c_pb = st.columns([1, 1], gap="medium")
+
+                    has_valid_selection = False
+                    if gran_choice == "☀️ Ανά Ημέρα":
+                        with c_pa:
+                            da_day = st.date_input("🅰️ Ημέρα Α (Εστίαση)", value=min(date.today(), end_d), key="comp_day_a", help="Επιλέξτε την πρώτη ημέρα σύγκρισης.")
+                            da_start = da_end = da_day
+                            lbl_a = f"Ημέρα {da_day.strftime('%d/%m/%Y')}"
+                        with c_pb:
+                            db_day = st.date_input("🅱️ Ημέρα Β (Σύγκριση με)", value=max(start_d, da_day - timedelta(days=7)), key="comp_day_b", help="Επιλέξτε τη δεύτερη ημέρα σύγκρισης.")
+                            db_start = db_end = db_day
+                            lbl_b = f"Ημέρα {db_day.strftime('%d/%m/%Y')}"
+                        has_valid_selection = True
+                    elif gran_choice == "🎯 Custom Εύρος":
+                        with c_pa:
+                            ca_range = st.date_input("🅰️ Εύρος Α (Έναρξη - Λήξη)", value=(max(start_d, end_d - timedelta(days=14)), end_d), key="comp_custom_a", help="Επιλέξτε το πρώτο εύρος ημερομηνιών.")
+                            if isinstance(ca_range, (tuple, list)) and len(ca_range) == 2:
+                                da_start, da_end = ca_range[0], ca_range[1]
+                            elif isinstance(ca_range, (tuple, list)) and len(ca_range) == 1:
+                                da_start = da_end = ca_range[0]
+                            else:
+                                da_start = da_end = (ca_range if ca_range else date.today())
+                            lbl_a = f"{da_start.strftime('%d/%m/%Y')} – {da_end.strftime('%d/%m/%Y')}"
+                        with c_pb:
+                            cb_range = st.date_input("🅱️ Εύρος Β (Έναρξη - Λήξη)", value=(max(start_d, da_start - timedelta(days=15)), max(start_d, da_start - timedelta(days=1))), key="comp_custom_b", help="Επιλέξτε το δεύτερο εύρος ημερομηνιών.")
+                            if isinstance(cb_range, (tuple, list)) and len(cb_range) == 2:
+                                db_start, db_end = cb_range[0], cb_range[1]
+                            elif isinstance(cb_range, (tuple, list)) and len(cb_range) == 1:
+                                db_start = db_end = cb_range[0]
+                            else:
+                                db_start = db_end = (cb_range if cb_range else date.today())
+                            lbl_b = f"{db_start.strftime('%d/%m/%Y')} – {db_end.strftime('%d/%m/%Y')}"
+                        has_valid_selection = True
+                    elif gran_choice == "📆 Ανά Μήνα":
+                        active_map = month_options_map
+                        opt_keys = list(active_map.keys())
+                        if len(opt_keys) >= 2:
+                            with c_pa:
+                                sel_a_key = st.selectbox("🅰️ Μήνας Α (Εστίαση):", options=opt_keys, index=0, key="comp_sel_a", help="Επιλέξτε τον πρώτο μήνα.")
+                            with c_pb:
+                                sel_b_key = st.selectbox("🅱️ Μήνας Β (Σύγκριση με):", options=opt_keys, index=min(1, len(opt_keys) - 1), key="comp_sel_b", help="Επιλέξτε τον μήνα σύγκρισης.")
+                            da_start, da_end, lbl_a = active_map[sel_a_key]
+                            db_start, db_end, lbl_b = active_map[sel_b_key]
+                            has_valid_selection = True
+                    elif gran_choice == "📅 Ανά Έτος":
+                        active_map = {k: v for k, v in year_options_map.items() if k.startswith("Έτος")}
+                        opt_keys = list(active_map.keys())
+                        if len(opt_keys) >= 2:
+                            with c_pa:
+                                sel_a_key = st.selectbox("🅰️ Έτος Α (Εστίαση):", options=opt_keys, index=0, key="comp_sel_a_yr", help="Επιλέξτε το πρώτο έτος.")
+                            with c_pb:
+                                sel_b_key = st.selectbox("🅱️ Έτος Β (Σύγκριση με):", options=opt_keys, index=min(1, len(opt_keys) - 1), key="comp_sel_b_yr", help="Επιλέξτε το έτος σύγκρισης.")
+                            da_start, da_end, lbl_a = active_map[sel_a_key]
+                            db_start, db_end, lbl_b = active_map[sel_b_key]
+                            has_valid_selection = True
+                    else:  # 🗓️ Ανά Εβδομάδα
+                        active_map = week_options_map
+                        opt_keys = list(active_map.keys())
+                        if len(opt_keys) >= 2:
+                            with c_pa:
+                                sel_a_key = st.selectbox("🅰️ Εβδομάδα Α (Εστίαση):", options=opt_keys, index=0, key="comp_sel_a_wk", help="Επιλέξτε την πρώτη εβδομάδα.")
+                            with c_pb:
+                                sel_b_key = st.selectbox("🅱️ Εβδομάδα Β (Σύγκριση με):", options=opt_keys, index=min(1, len(opt_keys) - 1), key="comp_sel_b_wk", help="Επιλέξτε την εβδομάδα σύγκρισης.")
+                            da_start, da_end, lbl_a = active_map[sel_a_key]
+                            db_start, db_end, lbl_b = active_map[sel_b_key]
+                            has_valid_selection = True
+
+                    if has_valid_selection:
+                        sum_a = compute_period_pnl_summary(da_start, da_end, lbl_a)
+                        sum_b = compute_period_pnl_summary(db_start, db_end, lbl_b)
+
+                        if sum_a and sum_b:
+                            def fmt_delta(val_a, val_b, is_pct_point=False, suffix="€"):
+                                diff = val_a - val_b
+                                if is_pct_point:
+                                    return f"{diff:+.1f} π.μ. (έναντι {val_b:.1f}%)"
+                                pct_ch = ((val_a - val_b) / abs(val_b) * 100.0) if abs(val_b) > 0.01 else 0.0
+                                return f"{diff:+,.2f} {suffix} ({pct_ch:+.1f}%)"
+
+                            m1, m2, m3, m4, m5 = st.columns(5)
+                            m1.metric(
+                                f"Μικτός Τζίρος ({lbl_a[:14]})",
+                                f"{sum_a['Μικτός Τζίρος (€)']:,.2f} €",
+                                fmt_delta(sum_a['Μικτός Τζίρος (€)'], sum_b['Μικτός Τζίρος (€)']),
+                                border=True
+                            )
+                            m2.metric(
+                                "Ραντεβού",
+                                f"{sum_a['Ραντεβού']:,}",
+                                f"{sum_a['Ραντεβού'] - sum_b['Ραντεβού']:+,} ραντ. ({((sum_a['Ραντεβού'] - sum_b['Ραντεβού']) / max(1, sum_b['Ραντεβού']) * 100):+.1f}%)",
+                                border=True
+                            )
+                            m3.metric(
+                                "Καθαρό Έσοδο / Ώρα",
+                                f"{sum_a['Καθαρό Έσοδο / Παραγ. Ώρα (€/h)']:.2f} €/h",
+                                fmt_delta(sum_a['Καθαρό Έσοδο / Παραγ. Ώρα (€/h)'], sum_b['Καθαρό Έσοδο / Παραγ. Ώρα (€/h)'], suffix="€/h"),
+                                border=True
+                            )
+                            m4.metric(
+                                "Μισθοδοσία & Πληρότητα",
+                                f"{sum_a['Συνολική Μισθοδοσία (€)']:,.0f} € ({sum_a['Πληρότητα (%)']:.1f}%)",
+                                fmt_delta(sum_a['Συνολική Μισθοδοσία (€)'], sum_b['Συνολική Μισθοδοσία (€)']),
+                                delta_color="inverse",
+                                border=True
+                            )
+                            m5.metric(
+                                "Καθαρό Κέρδος",
+                                f"{sum_a['Καθαρό Κέρδος (€)']:+,.2f} €",
+                                fmt_delta(sum_a['Καθαρό Κέρδος (€)'], sum_b['Καθαρό Κέρδος (€)']),
+                                border=True
+                            )
+
+                            col_cmp_ch, col_cmp_tbl = st.columns([1.15, 1.35], gap="medium")
+                            with col_cmp_ch:
+                                chart_metrics = [
+                                    "Μικτός Τζίρος (€)", "Καθαρός Τζίρος προ ΦΠΑ (€)",
+                                    "Συνολική Μισθοδοσία (€)", "Αναλώσιμα Υλικά (€)",
+                                    "Προμήθειες TW (€)", "Πάγια Έξοδα (€)", "Καθαρό Κέρδος (€)"
+                                ]
+                                fig_cmp = go.Figure()
+                                fig_cmp.add_trace(go.Bar(
+                                    x=chart_metrics,
+                                    y=[sum_a[m] for m in chart_metrics],
+                                    name=f"🅰️ {lbl_a}",
+                                    marker_color="#3b82f6",
+                                    text=[f"{sum_a[m]:,.0f}€" for m in chart_metrics],
+                                    textposition="outside"
+                                ))
+                                fig_cmp.add_trace(go.Bar(
+                                    x=chart_metrics,
+                                    y=[sum_b[m] for m in chart_metrics],
+                                    name=f"🅱️ {lbl_b}",
+                                    marker_color="#94a3b8",
+                                    text=[f"{sum_b[m]:,.0f}€" for m in chart_metrics],
+                                    textposition="outside"
+                                ))
+                                fig_cmp.update_layout(
+                                    barmode="group", height=380, margin=dict(t=30, b=20, l=10, r=10),
+                                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
+                                )
+                                st.plotly_chart(fig_cmp, width="stretch")
+
+                            with col_cmp_tbl:
+                                rows_cmp = []
+                                ordered_keys = [
+                                    ("Ραντεβού", ""),
+                                    ("Μικτός Τζίρος (€)", "€"),
+                                    ("Μη Τιμολογημένα Direct (Ραντ)", ""),
+                                    ("Μη Τιμολογημένα Direct Αξία (€)", "€"),
+                                    ("Δυνητικός Τζίρος (€)", "€"),
+                                    ("Καθαρός Τζίρος προ ΦΠΑ (€)", "€"),
+                                    ("Μέση Απόδειξη AOV (€)", "€"),
+                                    ("Μικτό Έσοδο / Παραγ. Ώρα (€/h)", "€/h"),
+                                    ("Καθαρό Έσοδο / Παραγ. Ώρα (€/h)", "€/h"),
+                                    ("Παραγωγικές Ώρες (h)", "h"),
+                                    ("Ώρες Βάρδιας (h)", "h"),
+                                    ("Πληρότητα (%)", "%"),
+                                    ("Εργασία σε Ραντεβού (€)", "€"),
+                                    ("Κόστος Νεκρού Χρόνου (€)", "€"),
+                                    ("Συνολική Μισθοδοσία (€)", "€"),
+                                    ("Αναλώσιμα Υλικά (€)", "€"),
+                                    ("Prime Cost (€)", "€"),
+                                    ("Prime Cost (%)", "%"),
+                                    ("Προμήθειες TW (€)", "€"),
+                                    ("Πάγια Έξοδα (€)", "€"),
+                                    ("Καθαρά Έξοδα Τιμολογίων (€)", "€"),
+                                    ("Συνολική Εκροή Εξόδων (€)", "€"),
+                                    ("Νεκρό Σημείο Τζίρου (€)", "€"),
+                                    ("Νεκρό Σημείο Ραντεβού", ""),
+                                    ("Πηγή Εξόδων", ""),
+                                    ("Καθαρό Κέρδος (€)", "€"),
+                                    ("Περιθώριο Κέρδους (%)", "%")
+                                ]
+                                for k_name, unit_s in ordered_keys:
+                                    raw_a = sum_a.get(k_name, 0)
+                                    raw_b = sum_b.get(k_name, 0)
+                                    if isinstance(raw_a, str) or isinstance(raw_b, str):
+                                        rows_cmp.append({
+                                            "Οικονομικός Δείκτης": k_name,
+                                            f"🅰️ {lbl_a}": str(raw_a),
+                                            f"🅱️ {lbl_b}": str(raw_b),
+                                            "Διαφορά (Α - Β)": "-",
+                                            "Μεταβολή (%)": "-"
+                                        })
+                                        continue
+                                    va = float(raw_a)
+                                    vb = float(raw_b)
+                                    diff_v = va - vb
+                                    pct_v = ((va - vb) / abs(vb) * 100.0) if abs(vb) > 0.01 else 0.0
+                                    if unit_s == "":
+                                        disp_a = f"{int(va):,}"
+                                        disp_b = f"{int(vb):,}"
+                                        disp_d = f"{int(diff_v):+,}"
+                                    else:
+                                        disp_a = f"{va:,.2f} {unit_s}"
+                                        disp_b = f"{vb:,.2f} {unit_s}"
+                                        disp_d = f"{diff_v:+,.2f} {unit_s}"
+                                    rows_cmp.append({
+                                        "Οικονομικός Δείκτης": k_name,
+                                        f"🅰️ {lbl_a}": disp_a,
+                                        f"🅱️ {lbl_b}": disp_b,
+                                        "Διαφορά (Α - Β)": disp_d,
+                                        "Μεταβολή (%)": f"{pct_v:+.1f}%"
+                                    })
+                                st.dataframe(pd.DataFrame(rows_cmp), hide_index=True, width="stretch", height=420)
+
+            else:
+                with st.container(border=True):
+                    st.subheader("📊 Συγκριτικός Πίνακας Όλων των Ετών (2024 vs 2025 vs 2026)", icon=":material/calendar_today:")
+                    yr_summaries = []
+                    for y_k, (ys, ye, ylbl) in year_options_map.items():
+                        if y_k.startswith("Έτος"):
+                            s_y = compute_period_pnl_summary(ys, ye, ylbl)
+                            if s_y:
+                                yr_summaries.append(s_y)
+                    if yr_summaries:
+                        df_yr_all = pd.DataFrame(yr_summaries)
+                        cols_to_show_yr = [
+                            "Περίοδος", "Ραντεβού", "Μικτός Τζίρος (€)", "Καθαρός Τζίρος προ ΦΠΑ (€)",
+                            "Καθαρό Έσοδο / Παραγ. Ώρα (€/h)", "Παραγωγικές Ώρες (h)", "Πληρότητα (%)",
+                            "Συνολική Μισθοδοσία (€)", "Αναλώσιμα Υλικά (€)", "Prime Cost (€)", "Prime Cost (%)",
+                            "Προμήθειες TW (€)", "Πάγια Έξοδα (€)", "Νεκρό Σημείο Τζίρου (€)", "Καθαρό Κέρδος (€)", "Περιθώριο Κέρδους (%)", "Πηγή Εξόδων"
+                        ]
+                        avail_cols_yr = [c for c in cols_to_show_yr if c in df_yr_all.columns]
+                        st.dataframe(df_yr_all[avail_cols_yr], hide_index=True, width="stretch")
+
+                st.space("small")
+
+                with st.container(border=True):
+                    st.subheader("📆 Συγκριτικός Πίνακας Όλων των Μηνών", icon=":material/date_range:", help="Μηνιαία κατανομή αποτελεσμάτων για όλο το επιλεγμένο έτος.")
+                    mo_summaries = []
+                    for m_k, (ms, me, mlbl) in month_options_map.items():
+                        s_m = compute_period_pnl_summary(ms, me, mlbl)
+                        if s_m:
+                            mo_summaries.append(s_m)
+                    if mo_summaries:
+                        df_mo_all = pd.DataFrame(mo_summaries)
+                        cols_to_show_mo = [
+                            "Περίοδος", "Ραντεβού", "Μικτός Τζίρος (€)", "Καθαρός Τζίρος προ ΦΠΑ (€)",
+                            "Καθαρό Έσοδο / Παραγ. Ώρα (€/h)", "Παραγωγικές Ώρες (h)", "Πληρότητα (%)",
+                            "Συνολική Μισθοδοσία (€)", "Αναλώσιμα Υλικά (€)", "Prime Cost (€)", "Prime Cost (%)",
+                            "Προμήθειες TW (€)", "Πάγια Έξοδα (€)", "Νεκρό Σημείο Τζίρου (€)", "Καθαρό Κέρδος (€)", "Περιθώριο Κέρδους (%)", "Πηγή Εξόδων"
+                        ]
+                        avail_cols_mo = [c for c in cols_to_show_mo if c in df_mo_all.columns]
+                        st.dataframe(df_mo_all[avail_cols_mo], hide_index=True, width="stretch")
+    elif cfo_subview == "🎛️ 3. Προσομοιωτής & Virtual CFO":
+
+        if not df_bookings_db.empty:
+            render_profitability_simulator(true_net_profit, idle_labor_cost, net_rev, comm_total, completed_count, period_label)
+
+            st.space("small")
+
+            with st.container(border=True):
+                st.subheader("🧠 Πλήρης Έκθεση Virtual CFO (Gemini Deep Audit — Μόνιμα Αποθηκευμένη στη Βάση)", icon=":material/psychology:", help="Ολοκληρωμένη στρατηγική έκθεση οικονομικού ελέγχου από το AI Virtual CFO με προτάσεις βελτιστοποίησης.")
+                st.caption(
+                    "Η τελευταία έκθεση Deep Audit αποθηκεύεται αυτόματα στη βάση δεδομένων (`Supabase`), ώστε **να μη χάνεται ποτέ στο Refresh (F5)** "
+                    "και να μην ξαναχρεώνει κλήση στο Gemini μέχρι να πατήσετε ξανά το κουμπί!"
                 )
-                st.markdown(active_audit["report_md"])
+
+                if "last_deep_audit" not in st.session_state:
+                    saved_audit = load_app_config_json("__LAST_DEEP_AUDIT__")
+                    st.session_state["last_deep_audit"] = saved_audit if isinstance(saved_audit, dict) else None
+
+                if st.button("🚀 Εκτέλεση Νέου Βαθέως Οικονομικού Ελέγχου (AI CFO)", type="primary", icon=":material/auto_awesome:"):
+                    if not gemini_api_key:
+                        st.error(f"Συμπληρώστε πρώτα το API Key ({ai_provider_choice}) στην Πλαϊνή Μπάρα (αριστερά)!")
+                    elif GENAI_AVAILABLE or ai_provider_choice != "Google Gemini":
+                        with st.spinner(f"Ο Virtual CFO ({selected_gemini_model}) αναλύει τα οικονομικά δεδομένα της περιόδου και αποθηκεύει την έκθεση στη βάση..."):
+                            try:
+                                ai_payload = {
+                                    "period": period_label,
+                                    "weeks_covered": len(period_weeks_seen),
+                                    "exact_schedule_weeks": len(period_exact_weeks_seen),
+                                    "gross_revenue": round(float(gross_rev), 2),
+                                    "net_revenue": round(float(net_rev), 2),
+                                    "net_revenue_per_productive_hour": round(float(net_per_prod_h), 2),
+                                    "treatwell_commissions": round(float(comm_total), 2),
+                                    "materials": round(float(mat_total), 2),
+                                    "productive_labor": round(float(labor_prod_total), 2),
+                                    "idle_labor_cost": round(float(idle_labor_cost), 2),
+                                    "fixed_expenses": round(float(fixed_expenses), 2),
+                                    "true_net_profit": round(float(true_net_profit), 2),
+                                    "technician_occupancy_pct": round(float(overall_occ_pct), 1),
+                                    "staff_breakdown": df_tech_perf.to_dict(orient="records") if not df_tech_perf.empty else [],
+                                    "worst_services": srv_matrix.sort_values(by="Πλήρες_Καθαρό_Κέρδος", ascending=True).head(5)[
+                                        ["raw_service", "Ραντεβού", "Μικτός_Τζίρος", "Καθαρό_Έσοδο_Ώρας", "Άμεσο_Κέρδος", "Πλήρες_Καθαρό_Κέρδος"]
+                                    ].to_dict(orient="records") if not srv_matrix.empty else []
+                                }
+                                prompt_cfo = f"""
+                                Είσαι ο Οικονομικός Διευθυντής (CFO) του Nail Salon.
+                                Ανάλυσε τα παρακάτω οικονομικά δεδομένα της περιόδου ({period_label}) και δώσε σε καθαρά Ελληνικά:
+                                1. Ακριβή διάγνωση γιατί το κατάστημα έχει αυτό το καθαρό αποτέλεσμα ενώ κάνει υψηλό τζίρο (εστίασε ιδιαίτερα στο καθαρό έσοδο ανά παραγωγική ώρα στις βασικές υπηρεσίες Ημιμόνιμο/Gel vs κόστος ώρας).
+                                2. Τις 4 πιο αποδοτικές κινήσεις (ανατιμήσεις συγκεκριμένων υπηρεσιών, μείωση διάρκειας, Treatwell re-booking, βάρδιες ανά τεχνίτρια) με ακριβή εκτίμηση ευρώ.
+                                ΔΕΔΟΜΕΝΑ: {json.dumps(ai_payload, ensure_ascii=False)}
+                                """
+                                resp_txt, used_m = call_gemini_smart(
+                                    api_key=gemini_api_key,
+                                    contents=prompt_cfo,
+                                    expect_json=False,
+                                    preferred_model=selected_gemini_model,
+                                    provider=ai_provider_choice,
+                                    thinking_level=selected_thinking_level
+                                )
+                                audit_obj = {
+                                    "period": period_label,
+                                    "model": used_m,
+                                    "ts": datetime.now().strftime("%d/%m/%Y %H:%M"),
+                                    "report_md": resp_txt
+                                }
+                                st.session_state["last_deep_audit"] = audit_obj
+                                save_app_config_json("__LAST_DEEP_AUDIT__", audit_obj)
+                                st.toast("Η έκθεση Deep Audit αποθηκεύτηκε μόνιμα στη βάση!", icon=":material/check_circle:")
+                            except Exception as e:
+                                st.error(f"Σφάλμα AI API: {e}")
+
+                active_audit = st.session_state.get("last_deep_audit")
+                if isinstance(active_audit, dict) and active_audit.get("report_md"):
+                    st.divider()
+                    st.info(
+                        f"📌 **Αποθηκευμένη Έκθεση Deep Audit** • Περίοδος Ανάλυσης: **`{active_audit.get('period', '-')}`** • "
+                        f"Ημερομηνία: `{active_audit.get('ts', '-')}` • Μοντέλο: `{active_audit.get('model', '-')}`",
+                        icon=":material/bookmark_added:"
+                    )
+                    st.markdown(active_audit["report_md"])
 
 # =====================================================================
-# TAB 5: ΔΕΔΟΜΕΝΑ, ΒΑΡΔΙΕΣ & ΡΥΘΜΙΣΕΙΣ (ΟΡΓΑΝΩΜΕΝΑ ΣΕ 3 ΥΠΟ-ΕΝΟΤΗΤΕΣ)
+# HUB 2: ΟΜΑΔΑ, ΒΑΡΔΙΕΣ & IDLE TIME
 # =====================================================================
-with tab_admin:
+with hub_staff:
+    if df_bookings_db.empty or df_tech_perf.empty:
+        st.info("Δεν υπάρχουν δεδομένα προσωπικού για την επιλεγμένη περίοδο.")
+    else:
+        staff_subview = st.segmented_control(
+            "Πλοήγηση Ομάδας & Βαρδιών",
+            options=[
+                "👩‍🔧 1. Απόδοση & Ταμείο Τεχνιτριών",
+                "👁️ 2. Ανάλυση Idle Time & Οπτικό Timeline",
+                "🤖 3. Smart Roster & AI Rebalancer"
+            ],
+            default="👩‍🔧 1. Απόδοση & Ταμείο Τεχνιτριών",
+            key="staff_subview_ctrl",
+            help="Επιλέξτε υπο-ενότητα: Αναλυτικός πίνακας απόδοσης και ταμείου τεχνιτριών, Οπτική ανάλυση νεκρού χρόνου (Timeline Gantt & Heatmap) ή Smart Roster για αυτόματη εξισορρόπηση βαρδιών."
+        )
+        st.space("small")
+
+        if staff_subview == "👩‍🔧 1. Απόδοση & Ταμείο Τεχνιτριών":
+            with st.container(border=True):
+                st.subheader("💶 Ακτινογραφία Μισθοδοσίας Περιόδου (Καθαρά στην Τσέπη vs ΕΦΚΑ/ΦΜΥ vs Κόστος Εργοδότη)", icon=":material/payments:", help="Αναλυτική διάσπαση του κόστους μισθοδοσίας σε καθαρές αποδοχές εργαζομένων, ασφαλιστικές εισφορές ΕΦΚΑ/ΦΜΥ και συνολικό κόστος εργοδότη.")
+                pm1, pm2, pm3, pm4 = st.columns(4)
+                pm1.metric(
+                    "1. Καθαρά στην Τσέπη Εργαζομένων",
+                    f"{total_net_pocket_payroll:,.2f} €",
+                    "Πληρωτέο ποσό στις εργαζόμενες",
+                    delta_color="off",
+                    border=True
+                )
+                pm2.metric(
+                    "2. ΕΦΚΑ (Εργαζ.+Εργοδ.) & ΦΜΥ",
+                    f"{total_efka_tax_payroll:,.2f} €",
+                    f"{(total_efka_tax_payroll / max(1.0, total_declared_payroll) * 100):.1f}% του συνολικού κόστους",
+                    delta_color="inverse",
+                    border=True
+                )
+                pm3.metric(
+                    "3. Προσωπικό Άδειας / Υποστήριξης",
+                    f"{support_payroll_cost:,.2f} €",
+                    "Άδεια / Καθαριότητα / Υποδοχή / Πρακτική",
+                    delta_color="off",
+                    border=True
+                )
+                pm4.metric(
+                    "4. Συνολικό Κόστος Εργοδότη",
+                    f"{total_declared_payroll:,.2f} €",
+                    f"{payroll_ratio_pct:.1f}% επί του Καθαρού Τζίρου",
+                    delta_color="inverse",
+                    border=True
+                )
+
+            st.space("small")
+
+            st.space('small')
+
+            with st.container(border=True):
+                c_st_h1, c_st_h2 = st.columns([2.5, 1.5], vertical_alignment="center")
+                with c_st_h1:
+                    st.subheader("👩‍🔧 Ταμείο, Μισθοδοσία & Παραγωγικότητα ανά Τεχνίτρια", icon=":material/badge:", help="Απόδοση ανά τεχνίτρια: ραντεβού, ώρες βάρδιας vs παραγωγικές ώρες, ποσοστό πληρότητας, τζίρος ταμείου, κόστος μισθοδοσίας και πραγματικό ισοζύγιο κέρδους/ζημιάς.")
+                with c_st_h2:
+                    staff_tbl_mode = st.segmented_control(
+                        "Προβολή Πίνακα",
+                        options=["Απλή Προβολή (9 Στήλες)", "Πλήρης Λογιστική Προβολή"],
+                        default="Απλή Προβολή (9 Στήλες)",
+                        key="staff_tbl_mode_ctrl"
+                    )
+
+                if staff_tbl_mode.startswith("Απλή"):
+                    cols_to_show = [
+                        "Τεχνίτρια", "Ραντεβού", "Ώρες Βάρδιας", "Παραγωγικές Ώρες",
+                        "Πληρότητα (%)", "Καθαρά στην Τσέπη (€)", "ΕΦΚΑ & ΦΜΥ (€)", "Μισθοδοσία (€)", "Πραγματικό Ισοζύγιο (€)"
+                    ]
+                    if show_non_calc_direct and "Δυνητικός_Τζίρος" in df_tech_perf.columns:
+                        cols_to_show.extend(["Μη_Τιμολογημένα_Direct_Ραντ", "Μη_Τιμολογημένα_Direct_Αξία", "Δυνητικός_Τζίρος"])
+                else:
+                    cols_to_show = [
+                        "Τεχνίτρια", "Ενεργές Εβδ.", "Ραντεβού", "Μικρά Ραντεβού (≤15')",
+                        "Ώρες Βάρδιας", "Παραγωγικές Ώρες", "Νεκρές Ώρες (Idle)", "Πληρότητα (%)",
+                        "Μικτός Τζίρος (€)", "Καθαρός Τζίρος (€)", "Προμήθειες TW (€)", "Υλικά (€)",
+                        "Καθαρά στην Τσέπη (€)", "ΕΦΚΑ & ΦΜΥ (€)", "Μισθοδοσία (€)", "Κόστος Νεκρού Χρόνου (€)", "Πραγματικό Ισοζύγιο (€)"
+                    ]
+                    if show_non_calc_direct and "Δυνητικός_Τζίρος" in df_tech_perf.columns:
+                        cols_to_show.extend(["Μη_Τιμολογημένα_Direct_Ραντ", "Μη_Τιμολογημένα_Direct_Αξία", "Δυνητικός_Τζίρος"])
+
+                st.dataframe(
+                    df_tech_perf[cols_to_show],
+                    hide_index=True,
+                    width="stretch",
+                    column_config={
+                        "Πληρότητα (%)": st.column_config.ProgressColumn("Πληρότητα %", min_value=0, max_value=100, format="%.1f%%"),
+                        "Καθαρά στην Τσέπη (€)": st.column_config.NumberColumn("Καθαρά Τσέπης (€)", format="%.2f €"),
+                        "ΕΦΚΑ & ΦΜΥ (€)": st.column_config.NumberColumn("ΕΦΚΑ & ΦΜΥ (€)", format="%.2f €"),
+                        "Μισθοδοσία (€)": st.column_config.NumberColumn("Κόστος Εργοδότη (€)", format="%.2f €"),
+                        "Κόστος Νεκρού Χρόνου (€)": st.column_config.NumberColumn("Κόστος Idle (€)", format="%.2f €"),
+                        "Μικτός Τζίρος (€)": st.column_config.NumberColumn("Μικτός (€)", format="%.2f €"),
+                        "Καθαρός Τζίρος (€)": st.column_config.NumberColumn("Καθαρός προ ΦΠΑ (€)", format="%.2f €"),
+                        "Προμήθειες TW (€)": st.column_config.NumberColumn("TW Προμ. (€)", format="%.2f €"),
+                        "Υλικά (€)": st.column_config.NumberColumn("Υλικά (€)", format="%.2f €"),
+                        "Πραγματικό Ισοζύγιο (€)": st.column_config.NumberColumn("Καθαρό Ισοζύγιο (€)", format="%+.2f €")
+                    }
+                )
+                if support_staff_details and use_accounting_payroll and include_support_staff:
+                    with st.expander(f"📋 Ανάλυση Προσωπικού Άδειας / Υποστήριξης στην Περίοδο ({support_payroll_cost:,.2f} € συνολικό κόστος)"):
+                        st.dataframe(pd.DataFrame(support_staff_details), hide_index=True, width="stretch")
+                st.caption(
+                    "💡 **Πώς διαβάζεται το Καθαρό Ισοζύγιο (€):** Είναι ο Καθαρός Τζίρος (προ ΦΠΑ) που έφερε η τεχνίτρια, "
+                    "μείον τις προμήθειες Treatwell των ραντεβού της, μείον τα υλικά της, μείον ολόκληρο το εργοδοτικό κόστος μισθοδοσίας της (Καθαρά + ΕΦΚΑ + ΦΜΥ + Δώρα)."
+                )
+
+
+            st.space("small")
+        elif staff_subview == "👁️ 2. Ανάλυση Idle Time & Οπτικό Timeline":
+            with st.container(border=True):
+                st.subheader("👁️ Οπτική Ακτινογραφία Idle Time ανά Τεχνίτρια (Με μια Ματιά)", icon=":material/timelapse:", help="Συγκριτικό γράφημα παραγωγικών ωρών (σε ραντεβού) έναντι νεκρών ωρών αναμονής (idle time) για κάθε μέλος της ομάδας.")
+                st.caption(
+                    "Το **Πράσινο** δείχνει πόσες ώρες η τεχνίτρια εξυπηρετούσε πελάτισσα. "
+                    "Το **Κόκκινο** δείχνει πόσες ώρες πληρωνόταν στη βάρδια χωρίς ραντεβού (Idle Time)."
+                )
+
+                df_plot_staff = df_tech_perf.sort_values("Ώρες Βάρδιας", ascending=True).copy()
+                fig_idle_bar = go.Figure()
+                fig_idle_bar.add_trace(go.Bar(
+                    y=df_plot_staff["Τεχνίτρια"],
+                    x=df_plot_staff["Παραγωγικές Ώρες"],
+                    name="🟢 Παραγωγικές Ώρες (Σε Ραντεβού)",
+                    orientation="h",
+                    marker_color="#10b981",
+                    text=[f"{p:,.1f}h ({u:.0f}%)" for p, u in zip(df_plot_staff["Παραγωγικές Ώρες"], df_plot_staff["Πληρότητα (%)"])],
+                    textposition="inside"
+                ))
+                fig_idle_bar.add_trace(go.Bar(
+                    y=df_plot_staff["Τεχνίτρια"],
+                    x=df_plot_staff["Νεκρές Ώρες (Idle)"],
+                    name="🔴 Νεκρός Χρόνος Αναμονής (Idle)",
+                    orientation="h",
+                    marker_color="#ef4444",
+                    text=[f"{i:,.1f}h κενές (-{c:,.0f}€)" if i > 0 else "" for i, c in zip(df_plot_staff["Νεκρές Ώρες (Idle)"], df_plot_staff["Κόστος Νεκρού Χρόνου (€)"])],
+                    textposition="inside"
+                ))
+                fig_idle_bar.update_layout(
+                    barmode="stack",
+                    height=300,
+                    margin=dict(t=15, b=15, l=10, r=10),
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    xaxis=dict(title="Σύνολο Ωρών Βάρδιας στην Περίοδο", ticksuffix=" h"),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
+                )
+                st.plotly_chart(fig_idle_bar, width="stretch")
+
+            st.space("small")
+
+            st.space('small')
+
+            with st.container(border=True):
+                st.subheader("🗓️ Χάρτης Βαρδιών: Ποιες Ημέρες & Ώρες Κάθονται οι Τεχνίτριες;", icon=":material/grid_on:", help="Θερμικός χάρτης (heatmap) προσφοράς προσωπικού έναντι πραγματικής ζήτησης ραντεβού ανά ημέρα και ώρα, αποκαλύπτοντας τις ζώνες υπερκάλυψης και έλλειψης.")
+                st.caption(
+                    "**Κόκκινα κελιά (+):** Έχετε περισσότερες τεχνίτριες στη βάρδια απ' όσες χρειάζονται τα ραντεβού (Πλεόνασμα / Idle Time). "
+                    "**Μπλε κελιά (-):** Η ζήτηση ξεπερνά τις τεχνίτριες της βάρδιας."
+                )
+
+                safe_day_counts = np.maximum(1.0, period_weekday_counts)
+                sched_cap_matrix = period_sched_total_matrix / safe_day_counts
+                active_staff_grid = period_staff_per_hour_grid
+
+                demand_total_matrix = np.zeros((6, 12))
+                for _, r in df_comp.iterrows():
+                    dur_h = float(r.get('duration_minutes', 0)) / 60.0
+                    if dur_h <= 0:
+                        continue
+                    dt_d = r['appointment_date_dt'].weekday()
+                    if dt_d > 5:
+                        continue
+                    t_parts = str(r.get('appointment_time', '09:00:00')).split(':')
+                    st_h = int(t_parts[0]) + (int(t_parts[1]) / 60.0 if len(t_parts) > 1 else 0.0)
+                    en_h = st_h + dur_h
+                    for h_idx, h in enumerate(range(9, 21)):
+                        ov = max(0.0, min(h + 1.0, en_h) - max(float(h), st_h))
+                        demand_total_matrix[dt_d, h_idx] += ov
+
+                demand_matrix = demand_total_matrix / safe_day_counts
+                excess_matrix = np.round(sched_cap_matrix - demand_matrix, 1)
+                hours_labels = [f"{h:02d}:00" for h in range(9, 21)]
+
+                fig_opt = px.imshow(
+                    excess_matrix,
+                    x=hours_labels,
+                    y=DAYS_GR,
+                    color_continuous_scale="RdBu_r",
+                    color_continuous_midpoint=0.0,
+                    text_auto=True,
+                    aspect="auto",
+                    labels=dict(x="Ώρα Ημέρας", y="Ημέρα", color="Πλεόνασμα (+) / Έλλειψη (-)")
+                )
+                fig_opt.update_layout(height=330, margin=dict(t=15, b=15, l=10, r=10), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+                st.plotly_chart(fig_opt, width="stretch")
+
+                avg_h_cost = df_staff_db[df_staff_db['hourly_cost'] > 0]['hourly_cost'].mean() if not df_staff_db.empty else 7.5
+                ov_blocks, un_blocks = generate_dynamic_shift_insights(sched_cap_matrix, demand_matrix, active_staff_grid, avg_h_cost)
+
+                st.markdown("##### 🎯 Οι 3 Κυριότερες Προτάσεις Ανακατανομής Βαρδιών")
+                c_o1, c_o2, c_o3 = st.columns(3, gap="medium")
+                with c_o1:
+                    if len(ov_blocks) >= 1:
+                        b1 = ov_blocks[0]
+                        st.error(
+                            f"**🔴 #1 Υπερστελέχωση: {b1['Ημέρα']} {b1['Ζώνη Ώρας']}**\n\n"
+                            f"Έχετε **{b1['Μ.Ο. Βάρδιας']} τεχνίτριες** ({b1['Τεχνίτριες στη Βάρδια']}), "
+                            f"ενώ η ζήτηση είναι **{b1['Μ.Ο. Ζήτησης']}** (+{b1['Πλεόνασμα (Τεχν.)']} κάθονται).\n\n"
+                            f"💸 Κόστος: **-{b1['Κόστος/Εβδ. (€)']:,.2f} € / εβδομάδα**"
+                        )
+                    else:
+                        st.success("**🟢 Καμία Σοβαρή Υπερστελέχωση**")
+                with c_o2:
+                    if len(ov_blocks) >= 2:
+                        b2 = ov_blocks[1]
+                        st.warning(
+                            f"**🟠 #2 Υπερστελέχωση: {b2['Ημέρα']} {b2['Ζώνη Ώρας']}**\n\n"
+                            f"Έχετε **{b2['Μ.Ο. Βάρδιας']} τεχνίτριες** ({b2['Τεχνίτριες στη Βάρδια']}), "
+                            f"ενώ η ζήτηση είναι **{b2['Μ.Ο. Ζήτησης']}** (+{b2['Πλεόνασμα (Τεχν.)']} κάθονται).\n\n"
+                            f"💸 Κόστος: **-{b2['Κόστος/Εβδ. (€)']:,.2f} € / εβδομάδα**"
+                        )
+                    else:
+                        st.success("**🟢 Ισορροπημένες Βάρδιες**")
+                with c_o3:
+                    if len(un_blocks) >= 1:
+                        u1 = un_blocks[0]
+                        st.info(
+                            f"**🔵 #1 Ζώνη Υψηλής Ζήτησης: {u1['Ημέρα']} {u1['Ζώνη Ώρας']}**\n\n"
+                            f"Στη βάρδια βρίσκονται **{u1['Μ.Ο. Βάρδιας']} τεχνίτριες**, "
+                            f"ενώ η ζήτηση φτάνει τις **{u1['Μ.Ο. Ζήτησης']}** (έλλειμμα **-{u1['Έλλειμμα (Τεχν.)']}**).\n\n"
+                            f"💡 Μεταφέρετε εδώ βάρδια από τις κόκκινες ζώνες!"
+                        )
+                    else:
+                        st.success("**🟢 Πλήρης Κάλυψη Αιχμής**")
+
+                with st.expander("📊 Προβολή Αναλυτικής Λίστας Όλων των Ζωνών Υπερστελέχωσης & Έλλειψης"):
+                    col_tb1, col_tb2 = st.columns(2)
+                    with col_tb1:
+                        st.markdown("**Ζώνες Υπερστελέχωσης (Ταξινομημένες κατά Εβδομαδιαίο Κόστος)**")
+                        if ov_blocks:
+                            st.dataframe(pd.DataFrame(ov_blocks), hide_index=True, width="stretch")
+                    with col_tb2:
+                        st.markdown("**Ζώνες Έλλειψης Προσωπικού**")
+                        if un_blocks:
+                            st.dataframe(pd.DataFrame(un_blocks), hide_index=True, width="stretch")
+
+
+            st.space('small')
+            render_daily_gantt_idle_detector(df_comp, db_schedules, staff_hourly_lookup, use_rolling_schedule)
+        elif staff_subview == "🤖 3. Smart Roster & AI Rebalancer":
+            render_shift_rebalancing_sandbox(sched_cap_matrix, demand_matrix, active_staff_grid, avg_h_cost)
+
+            st.space('small')
+            render_ai_shift_rebalancer(
+                sched_cap_matrix,
+                demand_matrix,
+                ov_blocks,
+                un_blocks,
+                avg_h_cost,
+                selected_gemini_model,
+                ai_provider_choice,
+                selected_thinking_level,
+                gemini_api_key
+            )
+
+# =====================================================================
+# HUB 3: ΥΠΗΡΕΣΙΕΣ, TREATWELL & ΤΑΜΕΙΟ
+# =====================================================================
+with hub_services:
+    if df_bookings_db.empty or srv_matrix.empty:
+        st.info("Δεν υπάρχουν δεδομένα υπηρεσιών για την επιλεγμένη περίοδο.")
+    else:
+        services_subview = st.segmented_control(
+            "Πλοήγηση Υπηρεσιών & Καναλιών",
+            options=[
+                "💅 1. Κερδοφορία Υπηρεσιών (Matrix)",
+                "🟣 2. Έλεγχος Treatwell & Συμφωνία Τιμολογίων",
+                "🛍️ 3. Πωλήσεις Λιανικής (POS)"
+            ],
+            default="💅 1. Κερδοφορία Υπηρεσιών (Matrix)",
+            key="services_subview_ctrl",
+            help="Επιλέξτε υπο-ενότητα: Πίνακας κερδοφορίας και περιθωρίων υπηρεσιών, Έλεγχος κρατήσεων και αυτόματη συμφωνία τιμολογίων Treatwell ή Καταγραφή πωλήσεων λιανικής προϊόντων."
+        )
+        st.space("small")
+
+        if services_subview == "💅 1. Κερδοφορία Υπηρεσιών (Matrix)":
+            col_top_loss, col_top_win = st.columns(2, gap="medium")
+            with col_top_loss:
+                with st.container(border=True):
+                    st.subheader("⚠️ Top 3 Υπηρεσίες Χαμηλότερου Περιθωρίου", icon=":material/trending_down:", help="Οι 3 υπηρεσίες που αφήνουν το μικρότερο ή αρνητικό καθαρό κέρδος μετά τον υπολογισμό υλικών, εργασίας και πάγιου κόστους καρέκλας.")
+                    st.caption("Αξιολόγηση βάσει πραγματικού κόστους εκτέλεσης (ΦΠΑ, TW, Υλικά, Εργασία Τεχνίτριας & Πάγιο Καρέκλας):")
+                    worst_3 = srv_matrix.sort_values(by="Πλήρες_Κέρδος_Ραντεβού", ascending=True).head(3)
+                    for _, r_w in worst_3.iterrows():
+                        st.error(
+                            f"**{r_w['raw_service']}** ({int(r_w['Ραντεβού'])} ραντεβού • ~{int(r_w['Μέση_Διάρκεια_Λεπτά'])}')\n\n"
+                            f"• Μικτός Τζίρος: **{r_w['Μικτός_Τζίρος']:,.0f} €** | Άμεσο Κέρδος: **{r_w['Άμεσο_Κέρδος_Ραντεβού']:+,.2f} € / ραντ.**\n"
+                            f"• Μετά το Πάγιο Καρέκλας: **{r_w['Πλήρες_Κέρδος_Ραντεβού']:+,.2f} € / ραντεβού** (Σύνολο: **{r_w['Πλήρες_Καθαρό_Κέρδος']:+,.2f} €**)"
+                        )
+
+            with col_top_win:
+                with st.container(border=True):
+                    st.subheader("🏆 Top 3 Πιο Κερδοφόρες Υπηρεσίες", icon=":material/workspace_premium:", help="Οι 3 υπηρεσίες με τη μεγαλύτερη συνεισφορά στο καθαρό κέρδος της επιχείρησης.")
+                    st.caption("Οι υπηρεσίες που αφήνουν το μεγαλύτερο καθαρό κέρδος στην επιχείρηση:")
+                    best_3 = srv_matrix.sort_values(by="Πλήρες_Καθαρό_Κέρδος", ascending=False).head(3)
+                    for _, r_b in best_3.iterrows():
+                        st.success(
+                            f"**{r_b['raw_service']}** ({int(r_b['Ραντεβού'])} ραντεβού • ~{int(r_b['Μέση_Διάρκεια_Λεπτά'])}')\n\n"
+                            f"• Μικτός Τζίρος: **{r_b['Μικτός_Τζίρος']:,.0f} €** | Άμεσο Κέρδος: **{r_b['Άμεσο_Κέρδος_Ραντεβού']:+,.2f} € / ραντ.**\n"
+                            f"• Καθαρό μετά το Πάγιο Καρέκλας: **{r_b['Πλήρες_Κέρδος_Ραντεβού']:+,.2f} € / ραντεβού** (Σύνολο: **{r_b['Πλήρες_Καθαρό_Κέρδος']:+,.2f} €**)"
+                        )
+
+            st.space("small")
+
+            with st.container(border=True):
+                c_sv1, c_sv2 = st.columns([2.4, 1.6], vertical_alignment="center")
+                with c_sv1:
+                    st.subheader("💅 Πίνακας Κερδοφορίας ανά Υπηρεσία", icon=":material/table_chart:", help="Πλήρης πίνακας ανάλυσης όλων των υπηρεσιών του καταλόγου: ραντεβού, μέση διάρκεια, τζίρος, κόστος προμηθειών, υλικά, εργασία, πάγια και καθαρό κέρδος.")
+                with c_sv2:
+                    srv_tbl_mode = st.segmented_control(
+                        "Λεπτομέρεια Πίνακα",
+                        options=["Απλή Προβολή (6 Στήλες)", "Πλήρης Κοστολόγηση (11 Στήλες)"],
+                        default="Απλή Προβολή (6 Στήλες)",
+                        key="srv_tbl_mode_ctrl"
+                    )
+
+                if srv_tbl_mode == "Απλή Προβολή (6 Στήλες)":
+                    srv_cols = [
+                        "raw_service", "Ραντεβού", "Μέση_Διάρκεια_Λεπτά",
+                        "Μικτός_Τζίρος", "Άμεσο_Κέρδος_Ραντεβού", "Πλήρες_Κέρδος_Ραντεβού"
+                    ]
+                    if show_non_calc_direct and "Δυνητικός_Τζίρος" in srv_matrix.columns:
+                        srv_cols.extend(["Μη_Τιμολογημένα_Direct_Ραντ", "Μη_Τιμολογημένα_Direct_Αξία", "Δυνητικός_Τζίρος"])
+                else:
+                    srv_cols = [
+                        "raw_service", "Ραντεβού", "Μέση_Διάρκεια_Λεπτά", "Μικτός_Τζίρος",
+                        "Προμήθειες", "Υλικά", "Εργασία", "Άμεσο_Κέρδος",
+                        "Αναλογία_Παγίων", "Πλήρες_Καθαρό_Κέρδος", "Πλήρες_Κέρδος_Ραντεβού"
+                    ]
+                    if show_non_calc_direct and "Δυνητικός_Τζίρος" in srv_matrix.columns:
+                        srv_cols.extend(["Μη_Τιμολογημένα_Direct_Ραντ", "Μη_Τιμολογημένα_Direct_Αξία", "Δυνητικός_Τζίρος"])
+
+                st.dataframe(
+                    srv_matrix[srv_cols],
+                    hide_index=True,
+                    width="stretch",
+                    column_config={
+                        "raw_service": st.column_config.TextColumn("Υπηρεσία"),
+                        "Μέση_Διάρκεια_Λεπτά": st.column_config.NumberColumn("Διάρκεια (λ.)", format="%d'"),
+                        "Μικτός_Τζίρος": st.column_config.NumberColumn("Μικτός Τζίρος (€)", format="%.2f €"),
+                        "Άμεσο_Κέρδος": st.column_config.NumberColumn("Άμεσο Κέρδος (€)", format="%+.2f €"),
+                        "Άμεσο_Κέρδος_Ραντεβού": st.column_config.NumberColumn("Άμεσο / Ραντ. (€)", format="%+.2f €"),
+                        "Αναλογία_Παγίων": st.column_config.NumberColumn("Αναλογία Παγίων (€)", format="-%.2f €"),
+                        "Πλήρες_Καθαρό_Κέρδος": st.column_config.NumberColumn("Πλήρες Κέρδος (€)", format="%+.2f €"),
+                        "Πλήρες_Κέρδος_Ραντεβού": st.column_config.NumberColumn("Πλήρες / Ραντ. (€)", format="%+.2f €")
+                    }
+                )
+        elif services_subview == "🟣 2. Έλεγχος Treatwell & Συμφωνία Τιμολογίων":
+            with st.container(border=True):
+                st.subheader("🌐 Κερδοφορία ανά Κανάλι Κράτησης", icon=":material/hub:", help="Κατανομή τζίρου και προμηθειών ανά πηγή προέλευσης: Treatwell Marketplace, Direct πελάτισσες, ή Walk-in, με αυτόματη συμφωνία τιμολογίων Treatwell.")
+                chan_grp = df_comp.groupby('channel').agg(
+                    Ραντεβού=('unique_id', 'count'),
+                    Μικτός_Τζίρος=('gross_price', 'sum'),
+                    Προμήθεια_TW=('commission_fee', 'sum'),
+                    Άμεσο_Κέρδος=('net_profit', 'sum')
+                ).reset_index()
+                chan_grp['Κέρδος / Ραντεβού (€)'] = (chan_grp['Άμεσο_Κέρδος'] / chan_grp['Ραντεβού']).round(2)
+                st.dataframe(
+                    chan_grp,
+                    hide_index=True,
+                    width="stretch",
+                    column_config={
+                        "channel": st.column_config.TextColumn("Κανάλι"),
+                        "Μικτός_Τζίρος": st.column_config.NumberColumn("Μικτός (€)", format="%.2f €"),
+                        "Προμήθεια_TW": st.column_config.NumberColumn("Προμήθεια (€)", format="%.2f €"),
+                        "Άμεσο_Κέρδος": st.column_config.NumberColumn("Άμεσο Κέρδος (€)", format="%+.2f €")
+                    }
+                )
+
+                if has_actual_expenses and actual_tw_net > 0:
+                    st.space("small")
+                    tw_diff = round(actual_tw_net - comm_total, 2)
+                    st.html(f"""
+                    <div style="background: rgba(147, 51, 234, 0.05); border: 1px solid rgba(147, 51, 234, 0.25); border-radius: 8px; padding: 12px 14px; font-size: 0.86rem; line-height: 1.6;">
+                        <div style="font-weight: 700; color: #a855f7; margin-bottom: 4px;">🟣 Συμφωνία με Πραγματικό Τιμολόγιο Treatwell:</div>
+                        <div>• Υπολογισμένες Προμήθειες Ραντεβού: <b>{comm_total:,.2f} €</b></div>
+                        <div>• Τιμολόγιο Treatwell (Καθαρή Αξία): <b>{actual_tw_net:,.2f} €</b> (με ΦΠΑ 24%: <b>{actual_tw_gross:,.2f} €</b>)</div>
+                        <div>• Διαφορά Συνδρομής & Processing: <b>+{tw_diff:,.2f} €</b> (Connect SaaS ~39€ + Κόστη επεξεργασίας καρτών)</div>
+                        <div style="color: #10b981; font-weight: 600; margin-top: 6px;">
+                            ✅ Πλήρης συμφωνία! Μόνο η διαφορά (+{tw_diff:,.2f} €) χρεώνεται στα λειτουργικά πάγια. Καμία διπλοχρέωση προμηθειών στο P&L.
+                        </div>
+                    </div>
+                    """)
+        elif services_subview == "🛍️ 3. Πωλήσεις Λιανικής (POS)":
+            with st.container(border=True):
+                st.subheader("🛍️ Πωλήσεις Λιανικής (Retail POS)", icon=":material/shopping_bag:", help="Καταγραφή και παρακολούθηση πωλήσεων προϊόντων φροντίδας και λιανικής στο ταμείο.")
+                df_products = df_services_db[df_services_db['category'] == 'Προϊόντα Λιανικής'].copy() if not df_services_db.empty else pd.DataFrame()
+                df_retail_sales = df_comp[df_comp['clean_category'] == 'Προϊόντα Λιανικής'].copy() if not df_comp.empty else pd.DataFrame()
+
+                ret_gross = float(df_retail_sales['gross_price'].sum()) if not df_retail_sales.empty else 0.0
+                ret_cogs = float(df_retail_sales['material_cost'].sum()) if not df_retail_sales.empty else 0.0
+                ret_net = float(df_retail_sales['net_revenue'].sum()) if not df_retail_sales.empty else 0.0
+                ret_profit = ret_net - ret_cogs
+
+                r_m1, r_m2, r_m3 = st.columns(3)
+                r_m1.metric("Τζίρος Λιανικής", f"{ret_gross:,.2f} €", border=True)
+                r_m2.metric("Κόστος (COGS)", f"{ret_cogs:,.2f} €", border=True)
+                r_m3.metric("Καθαρό Κέρδος", f"{ret_profit:+,.2f} €", border=True)
+
+                if not df_products.empty:
+                    with st.expander("➕ Καταχώρηση Νέας Πώλησης Προϊόντος Λιανικής"):
+                        c_pos1, c_pos2, c_pos3 = st.columns([2, 1, 1], vertical_alignment="bottom")
+                        with c_pos1:
+                            sel_prod_name = st.selectbox("Προϊόν", options=df_products['service_name'].tolist(), key="pos_prod_sel")
+                        with c_pos2:
+                            sel_prod_qty = st.number_input("Τεμάχια", min_value=1, max_value=20, value=1, key="pos_prod_qty")
+                        with c_pos3:
+                            if st.button("Καταχώρηση", type="primary", width="stretch", key="btn_pos_add"):
+                                p_row = df_products[df_products['service_name'] == sel_prod_name].iloc[0]
+                                u_price = float(p_row['gross_price']) * sel_prod_qty
+                                u_cost = float(p_row['material_cost_estimate']) * sel_prod_qty
+                                u_net = round(u_price / (1.0 + vat_rate_pct / 100.0), 2)
+                                u_vat = round(u_price - u_net, 2)
+                                now_dt = datetime.now()
+                                uid = f"RET_{now_dt.strftime('%Y%m%d%H%M%S')}_{slugify(sel_prod_name)}"
+                                new_rec = {
+                                    "unique_id": uid, "order_id": uid, "channel": "Direct (Τηλέφωνο)",
+                                    "order_date": now_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                                    "appointment_date": end_d.strftime("%Y-%m-%d"),
+                                    "appointment_time": now_dt.strftime("%H:%M:%S"),
+                                    "staff_name": "Reception / Ταμείο", "customer_name": "ΠΕΛΑΤΗΣ ΛΙΑΝΙΚΗΣ",
+                                    "raw_service": sel_prod_name, "clean_category": "Προϊόντα Λιανικής",
+                                    "duration_minutes": 0, "gross_price": u_price, "vat_amount": u_vat,
+                                    "net_revenue": u_net, "commission_pct": 0.0, "commission_fee": 0.0,
+                                    "material_cost": u_cost, "labor_cost": 0.0, "net_profit": round(u_net - u_cost, 2),
+                                    "status_raw": "Πώληση Λιανικής", "status_group": "COMPLETED", "is_first_visit": False
+                                }
+                                supabase.table("bookings_master").upsert([new_rec]).execute()
+                                st.toast(f"Καταχωρήθηκε πώληση: {sel_prod_qty}x {sel_prod_name}!", icon=":material/check_circle:")
+                                refresh_data()
+
+# =====================================================================
+# HUB 4: ΚΕΝΤΡΟ ΕΛΕΓΧΟΥ & ΡΥΘΜΙΣΕΙΣ
+# =====================================================================
+with hub_admin:
+
     admin_sub_nav_options = [
         "📅 1. Εβδομαδιαίες Βάρδιες (Editor, JSON & AI Screenshots)",
         "📥 2. Εισαγωγή Ραντεβού (Multi-CSV Importer)",
@@ -5806,9 +5992,9 @@ with tab_admin:
                             <hr style="margin: 6px 0; border: none; border-top: 1px solid rgba(148,163,184,0.2);">
                             <div style="font-size: 0.82rem; opacity: 0.9;">
                                 <b>Ανάλυση Διαφοράς:</b><br>
-                                1. Μηνιαία συνδρομή λογισμικού Treatwell Connect (~39 € – 49 €)<br>
-                                2. Τραπεζικά έξοδα επεξεργασίας καρτών (processing fees) σε προπληρωμένα ραντεβού (~76 € – 86 €)<br>
-                                3. ΦΠΑ 24% που αποδίδεται/εκπίπτει ({tw_inv_gross - tw_inv_net:,.2f} €)
+                                1. Μηνιαία συνδρομή λογισμικού Treatwell Connect Starter (29,00 € καθαρό / 35,96 € με ΦΠΑ)<br>
+                                2. Προμήθειες νέων πελατών (25%), επεξεργασία online καρτών (2%) & διαχειριστικά κόστη<br>
+                                3. ΦΠΑ 24% τιμολογίων Treatwell ({tw_inv_gross - tw_inv_net:,.2f} €)
                             </div>
                             <div style="margin-top: 8px; padding: 6px 10px; background: rgba(16,185,129,0.1); border-radius: 6px; color: #10b981; font-weight: 600; font-size: 0.80rem;">
                                 ✅ Προστασία P&L: Στα λειτουργικά έξοδα προστίθεται ΜΟΝΟ η διαφορά (+{tw_variance:,.2f} €). Οι προμήθειες ραντεβού ({tw_calc_comm:,.2f} €) δεν διπλοχρεώνονται!
