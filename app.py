@@ -29,6 +29,9 @@ st.set_page_config(
 
 st.html("""
 <style>
+    /* ========================================================= */
+    /* 🖥️ DESKTOP & BASE STYLES                                 */
+    /* ========================================================= */
     .cfo-card {
         padding: 16px 20px;
         border-radius: 12px;
@@ -63,6 +66,166 @@ st.html("""
         background-color: rgba(139, 92, 246, 0.08);
         border-color: rgba(139, 92, 246, 0.30);
         border-left: 5px solid #8b5cf6;
+    }
+
+    /* 1. Touch-Swipe Tabs (Always clean and overflow-protected) */
+    [data-baseweb="tab-list"] {
+        gap: 8px !important;
+        overflow-x: auto !important;
+        flex-wrap: nowrap !important;
+        -webkit-overflow-scrolling: touch !important;
+        scrollbar-width: none !important;
+        padding: 4px 2px 8px 2px !important;
+    }
+    [data-baseweb="tab-list"]::-webkit-scrollbar {
+        display: none !important;
+    }
+    [data-baseweb="tab"] {
+        white-space: nowrap !important;
+        flex-shrink: 0 !important;
+        font-size: 0.90rem !important;
+        padding: 8px 14px !important;
+        border-radius: 8px !important;
+    }
+
+    /* 2. Touch-Friendly Plotly Charts */
+    .js-plotly-plot, .plotly, .plot-container {
+        width: 100% !important;
+        max-width: 100% !important;
+        touch-action: pan-y !important;
+    }
+
+    /* ========================================================= */
+    /* 📱 MOBILE RESPONSIVE OPTIMIZATIONS (Max-Width: 768px)     */
+    /* Desktop (>768px) remains 100% unaffected and untouched!   */
+    /* ========================================================= */
+    @media (max-width: 768px) {
+        /* Screen Margin Optimization */
+        .main .block-container {
+            padding-top: 1rem !important;
+            padding-bottom: 2rem !important;
+            padding-left: 0.65rem !important;
+            padding-right: 0.65rem !important;
+            max-width: 100% !important;
+        }
+
+        /* Typography */
+        h1 {
+            font-size: 1.40rem !important;
+            line-height: 1.25 !important;
+        }
+        h2, [data-testid="stSubheader"] {
+            font-size: 1.15rem !important;
+            line-height: 1.3 !important;
+        }
+        h3 {
+            font-size: 1.02rem !important;
+        }
+
+        /* KPI Metrics: 2x2 Grid Layout */
+        div[data-testid="stHorizontalBlock"]:has(> div:nth-child(4)) {
+            display: flex !important;
+            flex-direction: row !important;
+            flex-wrap: wrap !important;
+            gap: 8px !important;
+        }
+        div[data-testid="stHorizontalBlock"]:has(> div:nth-child(4)) > div[data-testid="column"] {
+            flex: 1 1 calc(50% - 10px) !important;
+            min-width: calc(50% - 10px) !important;
+            max-width: 100% !important;
+            margin-bottom: 6px !important;
+        }
+
+        /* 3-Column Diagnostic / Strategic Cards */
+        div[data-testid="stHorizontalBlock"]:has(> div:nth-child(3)) {
+            display: flex !important;
+            flex-direction: row !important;
+            flex-wrap: wrap !important;
+            gap: 8px !important;
+        }
+        div[data-testid="stHorizontalBlock"]:has(> div:nth-child(3)) > div[data-testid="column"] {
+            flex: 1 1 calc(50% - 10px) !important;
+            min-width: calc(50% - 10px) !important;
+            margin-bottom: 6px !important;
+        }
+
+        /* Compact, Touch-Friendly Metrics */
+        div[data-testid="stMetric"] {
+            background: rgba(255, 255, 255, 0.02) !important;
+            border-radius: 8px !important;
+            padding: 8px 10px !important;
+        }
+        div[data-testid="stMetricLabel"] {
+            font-size: 0.78rem !important;
+            line-height: 1.2 !important;
+        }
+        div[data-testid="stMetricValue"] {
+            font-size: 1.20rem !important;
+            line-height: 1.2 !important;
+            font-weight: 700 !important;
+        }
+        div[data-testid="stMetricDelta"] {
+            font-size: 0.72rem !important;
+        }
+
+        /* Hide Plotly ModeBar on mobile for a clean app feel */
+        .js-plotly-plot .plotly .modebar {
+            display: none !important;
+        }
+
+        /* Touch-Friendly Buttons & Inputs */
+        button[kind="primary"], button[kind="secondary"], .stButton > button {
+            min-height: 42px !important;
+            font-size: 0.92rem !important;
+        }
+        div[data-baseweb="select"] {
+            min-height: 40px !important;
+        }
+
+        /* Smooth Segmented Controls on touch */
+        div[data-testid="stSegmentedControl"] {
+            overflow-x: auto !important;
+            flex-wrap: nowrap !important;
+            -webkit-overflow-scrolling: touch !important;
+            scrollbar-width: none !important;
+        }
+        div[data-testid="stSegmentedControl"] > div {
+            white-space: nowrap !important;
+            flex-shrink: 0 !important;
+        }
+
+        /* Dataframes & Tables */
+        div[data-testid="stDataFrame"], 
+        div[data-testid="stDataEditor"],
+        div[data-testid="stTable"] {
+            width: 100% !important;
+            overflow-x: auto !important;
+            -webkit-overflow-scrolling: touch !important;
+        }
+
+        /* CFO Cards */
+        .cfo-card {
+            padding: 12px 14px !important;
+            font-size: 0.86rem !important;
+            margin-bottom: 8px !important;
+        }
+
+        /* Sidebar on mobile */
+        section[data-testid="stSidebar"] {
+            width: 86vw !important;
+            max-width: 350px !important;
+        }
+    }
+
+    @media (max-width: 480px) {
+        div[data-testid="stHorizontalBlock"]:has(> div:nth-child(3)) > div[data-testid="column"] {
+            flex: 1 1 100% !important;
+            min-width: 100% !important;
+        }
+        div[data-testid="stHorizontalBlock"]:has(> div:nth-child(4)) > div[data-testid="column"] {
+            flex: 1 1 calc(50% - 6px) !important;
+            min-width: calc(50% - 6px) !important;
+        }
     }
 </style>
 """)
