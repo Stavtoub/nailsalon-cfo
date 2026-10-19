@@ -2093,6 +2093,7 @@ col_title, col_badge = st.columns([3.1, 1.3], vertical_alignment="center")
 with col_title:
     st.title("Nail Salon CFO — Οικονομική Ακτινογραφία", icon=":material/monitoring:")
     st.caption("Ξεκάθαρη απάντηση στο ερώτημα: «Γιατί ενώ έχουμε μεγάλο τζίρο, μένει ελάχιστο καθαρό κέρδος;»")
+    st.markdown("🚀 :blue-badge[✨ **Executive UI v2.0 Active**] • **4 Επιχειρησιακά Hubs** • **Universal Tooltips `(?)`** • **5-Level Comparison Engine**", help="Η νέα ανασχεδιασμένη αρχιτεκτονική του NailSalon CFO: 4 Επιχειρησιακά Hubs, σύγκριση 5 επιπέδων περιόδων, παρακολούθηση Non-Calculated Direct και πλήρη επεξηγηματικά tooltips σε κάθε στοιχείο.")
 with col_badge:
     with st.container(border=True):
         st.markdown(f"**Βάση Ενεργή** :green-badge[{len(df_bookings_db):,} Ραντεβού]")
