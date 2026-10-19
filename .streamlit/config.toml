@@ -1,0 +1,80 @@
+# Streamlit Configuration - Luxury Beauty & Modern Financial SaaS Theme
+[client]
+showErrorDetails = true
+
+[theme]
+showWidgetBorder = true
+showSidebarBorder = true
+baseRadius = "12px"
+buttonRadius = "10px"
+font = "'Plus Jakarta Sans':https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap"
+headingFont = "'Plus Jakarta Sans':https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@600;700;800&display=swap"
+codeFont = "'JetBrains Mono':https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap"
+codeFontSize = "0.875rem"
+baseFontSize = 14
+baseFontWeight = 400
+headingFontSizes = ["30px", "24px", "19px", "16px", "14px", "12px"]
+headingFontWeights = [700, 700, 600, 600, 600, 500]
+metricValueFontSize = "1.85rem"
+metricValueFontWeight = 800
+linkUnderline = false
+
+[theme.light]
+primaryColor = "#BE185D"
+backgroundColor = "#F8FAFC"
+secondaryBackgroundColor = "#FFFFFF"
+codeBackgroundColor = "#F1F5F9"
+textColor = "#0F172A"
+linkColor = "#BE185D"
+borderColor = "#E2E8F0"
+codeTextColor = "#0F172A"
+grayColor = "#64748B"
+blueColor = "#2563EB"
+greenColor = "#059669"
+redColor = "#DC2626"
+yellowColor = "#D97706"
+orangeColor = "#EA580C"
+violetColor = "#7C3AED"
+chartCategoricalColors = ["#BE185D", "#0284C7", "#059669", "#7C3AED", "#EA580C", "#D97706", "#64748B"]
+dataframeBorderColor = "#E2E8F0"
+dataframeHeaderBackgroundColor = "#F1F5F9"
+dataframeHeaderTextColor = "#0F172A"
+
+[theme.dark]
+primaryColor = "#FB7185"
+backgroundColor = "#0B0F17"
+secondaryBackgroundColor = "#131B2A"
+codeBackgroundColor = "#1E293B"
+textColor = "#F8FAFC"
+linkColor = "#FB7185"
+borderColor = "#1E293B"
+codeTextColor = "#F8FAFC"
+grayColor = "#94A3B8"
+blueColor = "#38BDF8"
+greenColor = "#10B981"
+redColor = "#F43F5E"
+yellowColor = "#FBBF24"
+orangeColor = "#FB923C"
+violetColor = "#C084FC"
+chartCategoricalColors = ["#FB7185", "#38BDF8", "#10B981", "#C084FC", "#FB923C", "#FBBF24", "#94A3B8"]
+dataframeBorderColor = "#1E293B"
+dataframeHeaderBackgroundColor = "#131B2A"
+dataframeHeaderTextColor = "#F8FAFC"
+
+[theme.light.sidebar]
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F8FAFC"
+codeBackgroundColor = "#F1F5F9"
+textColor = "#0F172A"
+borderColor = "#E2E8F0"
+primaryColor = "#BE185D"
+linkColor = "#BE185D"
+
+[theme.dark.sidebar]
+backgroundColor = "#080C14"
+secondaryBackgroundColor = "#131B2A"
+codeBackgroundColor = "#1E293B"
+textColor = "#F8FAFC"
+borderColor = "#1E293B"
+primaryColor = "#FB7185"
+linkColor = "#FB7185"
