@@ -30,7 +30,294 @@ st.set_page_config(
 st.html("""
 <style>
     /* ========================================================= */
-    /* 🖥️ DESKTOP & BASE STYLES                                 */
+    /* 🌟 MODERN LUXURY BEAUTY & FINANCIAL SAAS THEME (v2.0)     */
+    /* ========================================================= */
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400;1,600&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+    /* Global Typography & Smoothing */
+    html, body, [class*="css"], .stApp {
+        font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+        -webkit-font-smoothing: antialiased !important;
+        -moz-osx-font-smoothing: grayscale !important;
+        letter-spacing: -0.011em;
+    }
+
+    /* Tabular Numbers for all financial values, metrics & tables */
+    div[data-testid="stMetricValue"], 
+    div[data-testid="stDataFrame"], 
+    div[data-testid="stTable"],
+    .tnum {
+        font-feature-settings: "tnum" 1, "cv02" 1, "cv03" 1, "cv04" 1 !important;
+        font-variant-numeric: tabular-nums !important;
+    }
+
+    /* Headings hierarchy */
+    h1, [data-testid="stTitle"] {
+        font-weight: 800 !important;
+        letter-spacing: -0.03em !important;
+    }
+    h2, [data-testid="stSubheader"] {
+        font-weight: 700 !important;
+        letter-spacing: -0.02em !important;
+    }
+    h3 {
+        font-weight: 600 !important;
+        letter-spacing: -0.015em !important;
+    }
+
+    /* ========================================================= */
+    /* 🏛️ ELEVATED CONTAINERS & CARDS (DESKTOP & BASE)           */
+    /* ========================================================= */
+    div[data-testid="stVerticalBlockBorderWrapper"] > div {
+        border-radius: 14px !important;
+        border: 1px solid rgba(226, 232, 240, 0.85) !important;
+        background: #FFFFFF !important;
+        box-shadow: 0 1px 3px 0 rgba(15, 23, 42, 0.03), 0 6px 16px -4px rgba(15, 23, 42, 0.04) !important;
+        transition: box-shadow 0.25s cubic-bezier(0.16, 1, 0.3, 1), transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.2s ease !important;
+        padding: 18px 22px !important;
+    }
+    div[data-testid="stVerticalBlockBorderWrapper"] > div:hover {
+        border-color: rgba(203, 213, 225, 0.95) !important;
+        box-shadow: 0 4px 6px -1px rgba(15, 23, 42, 0.05), 0 12px 24px -4px rgba(15, 23, 42, 0.07) !important;
+    }
+
+    /* Dark Mode Card Surfaces */
+    @media (prefers-color-scheme: dark) {
+        div[data-testid="stVerticalBlockBorderWrapper"] > div {
+            background: #111827 !important;
+            border: 1px solid rgba(255, 255, 255, 0.08) !important;
+            box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.45) !important;
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"] > div:hover {
+            border-color: rgba(251, 113, 133, 0.25) !important;
+            box-shadow: 0 6px 24px -2px rgba(0, 0, 0, 0.55) !important;
+        }
+    }
+
+    /* ========================================================= */
+    /* 💳 FINTECH STATUS KPI METRIC CARDS                        */
+    /* ========================================================= */
+    div[data-testid="stMetric"] {
+        border-radius: 12px !important;
+        padding: 14px 18px !important;
+        border: 1px solid rgba(226, 232, 240, 0.85) !important;
+        background: linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%) !important;
+        box-shadow: 0 2px 8px -2px rgba(15, 23, 42, 0.04) !important;
+        transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.2s ease !important;
+    }
+    div[data-testid="stMetric"]:hover {
+        transform: translateY(-2px) !important;
+        border-color: rgba(190, 24, 93, 0.35) !important;
+        box-shadow: 0 8px 20px -4px rgba(15, 23, 42, 0.08) !important;
+    }
+    div[data-testid="stMetricLabel"] {
+        font-size: 0.80rem !important;
+        font-weight: 600 !important;
+        letter-spacing: 0.04em !important;
+        text-transform: uppercase !important;
+        color: #64748B !important;
+        margin-bottom: 4px !important;
+    }
+    div[data-testid="stMetricValue"] {
+        font-size: 1.65rem !important;
+        font-weight: 800 !important;
+        letter-spacing: -0.025em !important;
+        color: #0F172A !important;
+        line-height: 1.2 !important;
+    }
+    div[data-testid="stMetricDelta"] {
+        font-size: 0.78rem !important;
+        font-weight: 600 !important;
+        margin-top: 4px !important;
+    }
+
+    @media (prefers-color-scheme: dark) {
+        div[data-testid="stMetric"] {
+            border: 1px solid rgba(255, 255, 255, 0.08) !important;
+            background: linear-gradient(180deg, #161F30 0%, #0F172A 100%) !important;
+            box-shadow: 0 4px 12px -2px rgba(0, 0, 0, 0.35) !important;
+        }
+        div[data-testid="stMetric"]:hover {
+            border-color: rgba(251, 113, 133, 0.4) !important;
+            box-shadow: 0 8px 24px -2px rgba(0, 0, 0, 0.5) !important;
+        }
+        div[data-testid="stMetricLabel"] {
+            color: #94A3B8 !important;
+        }
+        div[data-testid="stMetricValue"] {
+            color: #F8FAFC !important;
+        }
+    }
+
+    /* ========================================================= */
+    /* 🧭 MODERN FLOATING TABS                                   */
+    /* ========================================================= */
+    [data-baseweb="tab-list"] {
+        gap: 6px !important;
+        background: rgba(148, 163, 184, 0.08) !important;
+        padding: 6px !important;
+        border-radius: 14px !important;
+        border: 1px solid rgba(148, 163, 184, 0.15) !important;
+        overflow-x: auto !important;
+        flex-wrap: nowrap !important;
+        scrollbar-width: none !important;
+        margin-bottom: 16px !important;
+    }
+    [data-baseweb="tab-list"]::-webkit-scrollbar {
+        display: none !important;
+    }
+    [data-baseweb="tab"] {
+        border-radius: 10px !important;
+        padding: 9px 18px !important;
+        font-size: 0.92rem !important;
+        font-weight: 600 !important;
+        color: #64748B !important;
+        background: transparent !important;
+        border: none !important;
+        white-space: nowrap !important;
+        flex-shrink: 0 !important;
+        transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
+    }
+    [data-baseweb="tab"]:hover {
+        color: #0F172A !important;
+        background: rgba(255, 255, 255, 0.6) !important;
+    }
+    [data-baseweb="tab"][aria-selected="true"] {
+        background: #FFFFFF !important;
+        color: #BE185D !important;
+        box-shadow: 0 2px 8px -1px rgba(15, 23, 42, 0.08), 0 1px 3px rgba(15, 23, 42, 0.05) !important;
+        font-weight: 700 !important;
+    }
+
+    @media (prefers-color-scheme: dark) {
+        [data-baseweb="tab-list"] {
+            background: rgba(15, 23, 42, 0.65) !important;
+            border-color: rgba(255, 255, 255, 0.08) !important;
+        }
+        [data-baseweb="tab"] {
+            color: #94A3B8 !important;
+        }
+        [data-baseweb="tab"]:hover {
+            color: #F8FAFC !important;
+            background: rgba(255, 255, 255, 0.05) !important;
+        }
+        [data-baseweb="tab"][aria-selected="true"] {
+            background: #1E293B !important;
+            color: #FB7185 !important;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35) !important;
+        }
+    }
+
+    /* ========================================================= */
+    /* 💊 MODERN SEGMENTED CONTROLS (PILLS NAVIGATION)          */
+    /* ========================================================= */
+    div[data-testid="stSegmentedControl"] {
+        background: rgba(148, 163, 184, 0.08) !important;
+        padding: 4px !important;
+        border-radius: 9999px !important;
+        border: 1px solid rgba(148, 163, 184, 0.15) !important;
+        overflow-x: auto !important;
+        flex-wrap: nowrap !important;
+        scrollbar-width: none !important;
+        width: fit-content !important;
+        max-width: 100% !important;
+    }
+    div[data-testid="stSegmentedControl"]::-webkit-scrollbar {
+        display: none !important;
+    }
+    div[data-testid="stSegmentedControl"] button {
+        border-radius: 9999px !important;
+        border: none !important;
+        font-weight: 600 !important;
+        font-size: 0.86rem !important;
+        padding: 6px 16px !important;
+        color: #64748B !important;
+        transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
+    }
+    div[data-testid="stSegmentedControl"] button:hover {
+        color: #0F172A !important;
+    }
+    div[data-testid="stSegmentedControl"] button[aria-checked="true"] {
+        background: #FFFFFF !important;
+        color: #BE185D !important;
+        box-shadow: 0 2px 8px -1px rgba(0, 0, 0, 0.12) !important;
+        font-weight: 700 !important;
+    }
+
+    @media (prefers-color-scheme: dark) {
+        div[data-testid="stSegmentedControl"] {
+            background: rgba(15, 23, 42, 0.6) !important;
+            border-color: rgba(255, 255, 255, 0.08) !important;
+        }
+        div[data-testid="stSegmentedControl"] button {
+            color: #94A3B8 !important;
+        }
+        div[data-testid="stSegmentedControl"] button:hover {
+            color: #F8FAFC !important;
+        }
+        div[data-testid="stSegmentedControl"] button[aria-checked="true"] {
+            background: #1E293B !important;
+            color: #FB7185 !important;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35) !important;
+        }
+    }
+
+    /* ========================================================= */
+    /* 🔘 BUTTONS & INTERACTIVE CONTROLS                        */
+    /* ========================================================= */
+    button[kind="primary"], .stButton > button[kind="primary"] {
+        background: linear-gradient(135deg, #E11D48 0%, #BE185D 100%) !important;
+        color: #FFFFFF !important;
+        border: none !important;
+        border-radius: 10px !important;
+        font-weight: 600 !important;
+        letter-spacing: -0.01em !important;
+        box-shadow: 0 4px 14px rgba(190, 24, 93, 0.25) !important;
+        transition: transform 0.15s ease, box-shadow 0.15s ease !important;
+    }
+    button[kind="primary"]:hover, .stButton > button[kind="primary"]:hover {
+        transform: translateY(-1px) !important;
+        box-shadow: 0 6px 20px rgba(190, 24, 93, 0.35) !important;
+    }
+    button[kind="secondary"], .stButton > button[kind="secondary"] {
+        border-radius: 10px !important;
+        font-weight: 500 !important;
+        border: 1px solid rgba(148, 163, 184, 0.3) !important;
+        transition: all 0.15s ease !important;
+    }
+    button[kind="secondary"]:hover, .stButton > button[kind="secondary"]:hover {
+        border-color: #BE185D !important;
+        color: #BE185D !important;
+    }
+
+    /* Input controls */
+    div[data-baseweb="input"], div[data-baseweb="select"] {
+        border-radius: 10px !important;
+    }
+
+    /* Dataframes & Tables */
+    div[data-testid="stDataFrame"] {
+        border-radius: 12px !important;
+        border: 1px solid rgba(226, 232, 240, 0.85) !important;
+        box-shadow: 0 2px 10px -2px rgba(15, 23, 42, 0.03) !important;
+        overflow: hidden !important;
+    }
+    @media (prefers-color-scheme: dark) {
+        div[data-testid="stDataFrame"] {
+            border-color: rgba(255, 255, 255, 0.08) !important;
+            box-shadow: 0 4px 14px -2px rgba(0, 0, 0, 0.35) !important;
+        }
+    }
+
+    /* Plotly charts container */
+    .js-plotly-plot, .plotly, .plot-container {
+        width: 100% !important;
+        max-width: 100% !important;
+        border-radius: 12px !important;
+    }
+
+    /* ========================================================= */
+    /* 🏷️ CUSTOM CFO CARDS                                       */
     /* ========================================================= */
     .cfo-card {
         padding: 16px 20px;
@@ -41,66 +328,38 @@ st.html("""
         border-width: 1px;
         border-style: solid;
         height: 100%;
+        box-shadow: 0 2px 8px -2px rgba(15, 23, 42, 0.04);
     }
     .cfo-card-red {
         background-color: rgba(239, 68, 68, 0.08);
-        border-color: rgba(239, 68, 68, 0.30);
+        border-color: rgba(239, 68, 68, 0.25);
         border-left: 5px solid #ef4444;
     }
     .cfo-card-amber {
         background-color: rgba(245, 158, 11, 0.08);
-        border-color: rgba(245, 158, 11, 0.30);
+        border-color: rgba(245, 158, 11, 0.25);
         border-left: 5px solid #f59e0b;
     }
     .cfo-card-green {
         background-color: rgba(16, 185, 129, 0.08);
-        border-color: rgba(16, 185, 129, 0.30);
+        border-color: rgba(16, 185, 129, 0.25);
         border-left: 5px solid #10b981;
     }
     .cfo-card-blue {
         background-color: rgba(59, 130, 246, 0.08);
-        border-color: rgba(59, 130, 246, 0.30);
+        border-color: rgba(59, 130, 246, 0.25);
         border-left: 5px solid #3b82f6;
     }
     .cfo-card-purple {
         background-color: rgba(139, 92, 246, 0.08);
-        border-color: rgba(139, 92, 246, 0.30);
+        border-color: rgba(139, 92, 246, 0.25);
         border-left: 5px solid #8b5cf6;
-    }
-
-    /* 1. Touch-Swipe Tabs (Always clean and overflow-protected) */
-    [data-baseweb="tab-list"] {
-        gap: 8px !important;
-        overflow-x: auto !important;
-        flex-wrap: nowrap !important;
-        -webkit-overflow-scrolling: touch !important;
-        scrollbar-width: none !important;
-        padding: 4px 2px 8px 2px !important;
-    }
-    [data-baseweb="tab-list"]::-webkit-scrollbar {
-        display: none !important;
-    }
-    [data-baseweb="tab"] {
-        white-space: nowrap !important;
-        flex-shrink: 0 !important;
-        font-size: 0.90rem !important;
-        padding: 8px 14px !important;
-        border-radius: 8px !important;
-    }
-
-    /* 2. Touch-Friendly Plotly Charts */
-    .js-plotly-plot, .plotly, .plot-container {
-        width: 100% !important;
-        max-width: 100% !important;
-        touch-action: pan-y !important;
     }
 
     /* ========================================================= */
     /* 📱 MOBILE RESPONSIVE OPTIMIZATIONS (Max-Width: 768px)     */
-    /* Desktop (>768px) remains 100% unaffected and untouched!   */
     /* ========================================================= */
     @media (max-width: 768px) {
-        /* Screen Margin Optimization */
         .main .block-container {
             padding-top: 1rem !important;
             padding-bottom: 2rem !important;
@@ -109,20 +368,19 @@ st.html("""
             max-width: 100% !important;
         }
 
-        /* Typography */
         h1 {
-            font-size: 1.40rem !important;
+            font-size: 1.35rem !important;
             line-height: 1.25 !important;
         }
         h2, [data-testid="stSubheader"] {
-            font-size: 1.15rem !important;
+            font-size: 1.12rem !important;
             line-height: 1.3 !important;
         }
         h3 {
-            font-size: 1.02rem !important;
+            font-size: 1.00rem !important;
         }
 
-        /* KPI Metrics: 2x2 Grid Layout */
+        /* KPI Metrics: 2x2 Grid Layout on Mobile */
         div[data-testid="stHorizontalBlock"]:has(> div:nth-child(4)) {
             display: flex !important;
             flex-direction: row !important;
@@ -136,7 +394,7 @@ st.html("""
             margin-bottom: 6px !important;
         }
 
-        /* 3-Column Diagnostic / Strategic Cards */
+        /* 3-Column Cards on Mobile */
         div[data-testid="stHorizontalBlock"]:has(> div:nth-child(3)) {
             display: flex !important;
             flex-direction: row !important;
@@ -149,68 +407,34 @@ st.html("""
             margin-bottom: 6px !important;
         }
 
-        /* Compact, Touch-Friendly Metrics */
         div[data-testid="stMetric"] {
-            background: rgba(255, 255, 255, 0.02) !important;
-            border-radius: 8px !important;
-            padding: 8px 10px !important;
+            padding: 10px 12px !important;
         }
         div[data-testid="stMetricLabel"] {
-            font-size: 0.78rem !important;
-            line-height: 1.2 !important;
+            font-size: 0.74rem !important;
         }
         div[data-testid="stMetricValue"] {
-            font-size: 1.20rem !important;
-            line-height: 1.2 !important;
-            font-weight: 700 !important;
+            font-size: 1.25rem !important;
         }
         div[data-testid="stMetricDelta"] {
-            font-size: 0.72rem !important;
+            font-size: 0.70rem !important;
         }
 
-        /* Hide Plotly ModeBar on mobile for a clean app feel */
         .js-plotly-plot .plotly .modebar {
             display: none !important;
         }
 
-        /* Touch-Friendly Buttons & Inputs */
         button[kind="primary"], button[kind="secondary"], .stButton > button {
             min-height: 42px !important;
-            font-size: 0.92rem !important;
-        }
-        div[data-baseweb="select"] {
-            min-height: 40px !important;
+            font-size: 0.90rem !important;
         }
 
-        /* Smooth Segmented Controls on touch */
-        div[data-testid="stSegmentedControl"] {
-            overflow-x: auto !important;
-            flex-wrap: nowrap !important;
-            -webkit-overflow-scrolling: touch !important;
-            scrollbar-width: none !important;
-        }
-        div[data-testid="stSegmentedControl"] > div {
-            white-space: nowrap !important;
-            flex-shrink: 0 !important;
-        }
-
-        /* Dataframes & Tables */
-        div[data-testid="stDataFrame"], 
-        div[data-testid="stDataEditor"],
-        div[data-testid="stTable"] {
-            width: 100% !important;
-            overflow-x: auto !important;
-            -webkit-overflow-scrolling: touch !important;
-        }
-
-        /* CFO Cards */
         .cfo-card {
             padding: 12px 14px !important;
             font-size: 0.86rem !important;
             margin-bottom: 8px !important;
         }
 
-        /* Sidebar on mobile */
         section[data-testid="stSidebar"] {
             width: 86vw !important;
             max-width: 350px !important;
