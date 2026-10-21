@@ -701,6 +701,7 @@ def load_all_db_data(cache_v: int = 3):
     return staff, services, expenses, bookings, schedules_dict, app_settings_dict, payroll, expenses_ledger
 
 df_staff_db, df_services_db, df_expenses_db, df_bookings_db, db_schedules, db_app_settings, df_payroll_db, df_expenses_ledger_db = load_all_db_data()
+monthly_fixed = float(df_expenses_db['amount'].sum()) if (df_expenses_db is not None and not df_expenses_db.empty and 'amount' in df_expenses_db.columns) else 1050.0
 
 def strip_greek_accents(text):
     if not text:
@@ -3338,40 +3339,50 @@ if not df_bookings_db.empty:
         actual_mydata_payroll = round(float(exp_by_cat.get("Μισθοδοσία & Εισφορές (myDATA)", 0.0)), 2)
         actual_other_taxes = round(float(pd.to_numeric(actual_period_exp_df.get("other_taxes", 0.0), errors="coerce").sum()), 2)
 
+        s_main = actual_period_exp_df["main_category"].astype(str).map(strip_greek_accents)
+        s_sub = actual_period_exp_df["sub_category"].astype(str).map(strip_greek_accents)
+        s_vend = actual_period_exp_df["vendor_name"].astype(str).map(strip_greek_accents)
+        s_notes = actual_period_exp_df.get("notes", pd.Series(index=actual_period_exp_df.index, dtype=str)).astype(str).map(strip_greek_accents)
+
         # 1. Treatwell: Το τιμολόγιο περιλαμβάνει προμήθειες ραντεβού (ήδη στο comm_total) + Connect SaaS + processing fees.
-        tw_mask = actual_period_exp_df["vendor_name"].astype(str).str.lower().str.contains("treatwell|funkmartini") | actual_period_exp_df["sub_category"].astype(str).str.lower().str.contains("treatwell")
-        actual_tw_net = round(float(pd.to_numeric(actual_period_exp_df[tw_mask]["net_amount"], errors="coerce").sum()), 2)
-        actual_tw_gross = round(float(pd.to_numeric(actual_period_exp_df[tw_mask]["gross_amount"], errors="coerce").sum()), 2)
+        tw_mask = s_vend.str.contains("treatwell|funkmartini") | s_sub.str.contains("treatwell")
+        actual_tw_net = round(float(pd.to_numeric(actual_period_exp_df.loc[tw_mask, "net_amount"], errors="coerce").sum()), 2)
+        actual_tw_gross = round(float(pd.to_numeric(actual_period_exp_df.loc[tw_mask, "gross_amount"], errors="coerce").sum()), 2)
         tw_overhead_variance = max(0.0, round(actual_tw_net - comm_total, 2))
 
-        # 2. Ασφαλιστικές εισφορές (ΕΦΚΑ, ΤΕΚΑ, ΚΕΑΟ): Περιλαμβάνονται ήδη στο εργοδοτικό κόστος μισθοδοσίας (total_declared_payroll).
-        ins_mask = (
-            actual_period_exp_df["sub_category"].astype(str).str.upper().str.contains("ΕΦΚΑ|ΤΕΚΑ|ΚΕΑΟ") |
-            actual_period_exp_df["vendor_name"].astype(str).str.upper().str.contains("ΕΦΚΑ|ΤΕΚΑ|ΚΕΑΟ") |
-            actual_period_exp_df["notes"].astype(str).str.upper().str.contains("ΕΦΚΑ|ΤΕΚΑ|ΚΕΑΟ")
-        )
-        actual_payroll_insurance = round(float(pd.to_numeric(actual_period_exp_df[ins_mask]["net_amount"], errors="coerce").sum()), 2)
-
-        # 3. Φορολογικές υποχρεώσεις ΔΟΥ / ΑΑΔΕ (ΦΜΥ, φόρος εισοδήματος, ΦΠΑ κ.λπ.)
-        tax_mask = (
-            actual_period_exp_df["sub_category"].astype(str).str.upper().str.contains("ΔΟΥ|ΦΟΡΟΛΟΓΙΚ") |
-            actual_period_exp_df["vendor_name"].astype(str).str.upper().str.contains("ΑΑΔΕ|ΔΟΥ")
-        )
-        actual_tax_doy = round(float(pd.to_numeric(actual_period_exp_df[tax_mask]["net_amount"], errors="coerce").sum()), 2)
-
-        # 4. Αμοιβές μισθοδοσίας αν έχουν καταχωρηθεί στο ledger
+        # 2. Μισθοδοσία & Εισφορές (myDATA / μισθοί): Αφαιρούνται από τα πάγια γιατί υπολογίζονται ήδη στο total_declared_payroll
         sal_mask = (
-            actual_period_exp_df["sub_category"].astype(str).str.upper().str.contains("ΜΙΣΘΟΔΟΣΙ") |
-            actual_period_exp_df["vendor_name"].astype(str).str.upper().str.contains("ΜΙΣΘΟΔΟΣΙ") |
-            actual_period_exp_df["main_category"].astype(str).str.upper().str.contains("ΜΙΣΘΟΔΟΣΙ")
+            (actual_period_exp_df["main_category"] == "Μισθοδοσία & Εισφορές (myDATA)") |
+            s_main.str.contains("μισθοδοσ|εισφορ") |
+            s_sub.str.contains("μισθοδοσ|μισθο|αποδοχ") |
+            s_vend.str.contains("μισθοδοσ|μισθο")
         )
-        actual_salary_entries_net = round(float(pd.to_numeric(actual_period_exp_df[sal_mask]["net_amount"], errors="coerce").sum()), 2)
+        actual_salary_entries_net = round(float(pd.to_numeric(actual_period_exp_df.loc[sal_mask, "net_amount"], errors="coerce").sum()), 2)
+
+        # 3. Ασφαλιστικές εισφορές (ΕΦΚΑ, ΤΕΚΑ, ΚΕΑΟ): Περιλαμβάνονται ήδη στο εργοδοτικό κόστος μισθοδοσίας (total_declared_payroll)
+        ins_mask = ~sal_mask & (
+            s_sub.str.contains("εφκα|τεκα|κεαο|ασφαλιστικ") |
+            s_vend.str.contains("εφκα|τεκα|κεαο") |
+            s_notes.str.contains("εφκα|τεκα|κεαο")
+        )
+        actual_payroll_insurance = round(float(pd.to_numeric(actual_period_exp_df.loc[ins_mask, "net_amount"], errors="coerce").sum()), 2)
+
+        # 4. Φορολογικές υποχρεώσεις ΔΟΥ / ΑΑΔΕ (ΦΜΥ, φόρος εισοδήματος, ΦΠΑ κ.λπ.)
+        tax_mask = ~sal_mask & ~ins_mask & (
+            s_sub.str.contains("δου|φορολογ") |
+            s_vend.str.contains("ααδε|δου")
+        )
+        actual_tax_doy = round(float(pd.to_numeric(actual_period_exp_df.loc[tax_mask, "net_amount"], errors="coerce").sum()), 2)
 
         # 5. Καθαρά Λειτουργικά Πάγια (OPEX): Ενοίκιο, Ρεύμα, Νερό, Τηλέφωνο, Λογιστής, SaaS, POS, Marketing, Μικροέξοδα + Treatwell Connect variance
-        fixed_expenses = round(period_net_expenses - actual_cogs_materials - actual_tw_net - actual_payroll_insurance - actual_tax_doy - actual_salary_entries_net - actual_capex - actual_depreciation + tw_overhead_variance, 2)
+        cogs_mask = actual_period_exp_df["main_category"] == "Κόστος Υλικών & Εμπορευμάτων (COGS)"
+        capex_mask = actual_period_exp_df["main_category"] == "Συντήρηση, Εξοπλισμός & Έκτακτα (CapEx)"
+        depr_mask = actual_period_exp_df["main_category"] == "Αποσβέσεις & Ετήσιες Εγγραφές (EBT)"
+
+        non_fixed_mask = tw_mask | sal_mask | ins_mask | tax_mask | cogs_mask | capex_mask | depr_mask
+        fixed_expenses = round(float(pd.to_numeric(actual_period_exp_df.loc[~non_fixed_mask, "net_amount"], errors="coerce").sum()) + tw_overhead_variance, 2)
+        effective_calendar_days = max(1.0, active_workdays_count * (7.0 / 6.0))
         if fixed_expenses <= 0:
-            monthly_fixed = float(df_expenses_db['amount'].sum()) if not df_expenses_db.empty else 1050.0
-            effective_calendar_days = max(1.0, active_workdays_count * (7.0 / 6.0))
             fixed_expenses = round(monthly_fixed * (effective_calendar_days / 30.4375), 2)
     else:
         monthly_fixed = float(df_expenses_db['amount'].sum()) if not df_expenses_db.empty else 1050.0
@@ -3593,31 +3604,42 @@ def compute_period_pnl_summary(p_start_d: date, p_end_d: date, p_label: str):
         p_depreciation = round(float(p_exp_by_cat.get("Αποσβέσεις & Ετήσιες Εγγραφές (EBT)", 0.0)), 2)
         p_mydata_payroll = round(float(p_exp_by_cat.get("Μισθοδοσία & Εισφορές (myDATA)", 0.0)), 2)
 
-        p_tw_mask = p_act_exp_df["vendor_name"].astype(str).str.lower().str.contains("treatwell|funkmartini") | p_act_exp_df["sub_category"].astype(str).str.lower().str.contains("treatwell")
-        p_tw_net = round(float(pd.to_numeric(p_act_exp_df[p_tw_mask]["net_amount"], errors="coerce").sum()), 2)
+        p_s_main = p_act_exp_df["main_category"].astype(str).map(strip_greek_accents)
+        p_s_sub = p_act_exp_df["sub_category"].astype(str).map(strip_greek_accents)
+        p_s_vend = p_act_exp_df["vendor_name"].astype(str).map(strip_greek_accents)
+        p_s_notes = p_act_exp_df.get("notes", pd.Series(index=p_act_exp_df.index, dtype=str)).astype(str).map(strip_greek_accents)
+
+        p_tw_mask = p_s_vend.str.contains("treatwell|funkmartini") | p_s_sub.str.contains("treatwell")
+        p_tw_net = round(float(pd.to_numeric(p_act_exp_df.loc[p_tw_mask, "net_amount"], errors="coerce").sum()), 2)
         p_tw_var = max(0.0, round(p_tw_net - p_comm, 2))
 
-        p_ins_mask = (
-            p_act_exp_df["sub_category"].astype(str).str.upper().str.contains("ΕΦΚΑ|ΤΕΚΑ|ΚΕΑΟ") |
-            p_act_exp_df["vendor_name"].astype(str).str.upper().str.contains("ΕΦΚΑ|ΤΕΚΑ|ΚΕΑΟ") |
-            p_act_exp_df["notes"].astype(str).str.upper().str.contains("ΕΦΚΑ|ΤΕΚΑ|ΚΕΑΟ")
-        )
-        p_ins_net = round(float(pd.to_numeric(p_act_exp_df[p_ins_mask]["net_amount"], errors="coerce").sum()), 2)
-
-        p_tax_mask = (
-            p_act_exp_df["sub_category"].astype(str).str.upper().str.contains("ΔΟΥ|ΦΟΡΟΛΟΓΙΚ") |
-            p_act_exp_df["vendor_name"].astype(str).str.upper().str.contains("ΑΑΔΕ|ΔΟΥ")
-        )
-        p_tax_net = round(float(pd.to_numeric(p_act_exp_df[tax_mask]["net_amount"], errors="coerce").sum()), 2)
-
         p_sal_mask = (
-            p_act_exp_df["sub_category"].astype(str).str.upper().str.contains("ΜΙΣΘΟΔΟΣΙ") |
-            p_act_exp_df["vendor_name"].astype(str).str.upper().str.contains("ΜΙΣΘΟΔΟΣΙ") |
-            p_act_exp_df["main_category"].astype(str).str.upper().str.contains("ΜΙΣΘΟΔΟΣΙ")
+            (p_act_exp_df["main_category"] == "Μισθοδοσία & Εισφορές (myDATA)") |
+            p_s_main.str.contains("μισθοδοσ|εισφορ") |
+            p_s_sub.str.contains("μισθοδοσ|μισθο|αποδοχ") |
+            p_s_vend.str.contains("μισθοδοσ|μισθο")
         )
-        p_sal_net = round(float(pd.to_numeric(p_act_exp_df[p_sal_mask]["net_amount"], errors="coerce").sum()), 2)
+        p_sal_net = round(float(pd.to_numeric(p_act_exp_df.loc[p_sal_mask, "net_amount"], errors="coerce").sum()), 2)
 
-        p_fixed = round(p_net_exp - p_cogs_mat - p_tw_net - p_ins_net - p_tax_net - p_sal_net - p_capex - p_depreciation + p_tw_var, 2)
+        p_ins_mask = ~p_sal_mask & (
+            p_s_sub.str.contains("εφκα|τεκα|κεαο|ασφαλιστικ") |
+            p_s_vend.str.contains("εφκα|τεκα|κεαο") |
+            p_s_notes.str.contains("εφκα|τεκα|κεαο")
+        )
+        p_ins_net = round(float(pd.to_numeric(p_act_exp_df.loc[p_ins_mask, "net_amount"], errors="coerce").sum()), 2)
+
+        p_tax_mask = ~p_sal_mask & ~p_ins_mask & (
+            p_s_sub.str.contains("δου|φορολογ") |
+            p_s_vend.str.contains("ααδε|δου")
+        )
+        p_tax_net = round(float(pd.to_numeric(p_act_exp_df.loc[p_tax_mask, "net_amount"], errors="coerce").sum()), 2)
+
+        p_cogs_mask = p_act_exp_df["main_category"] == "Κόστος Υλικών & Εμπορευμάτων (COGS)"
+        p_capex_mask = p_act_exp_df["main_category"] == "Συντήρηση, Εξοπλισμός & Έκτακτα (CapEx)"
+        p_depr_mask = p_act_exp_df["main_category"] == "Αποσβέσεις & Ετήσιες Εγγραφές (EBT)"
+
+        p_non_fixed_mask = p_tw_mask | p_sal_mask | p_ins_mask | p_tax_mask | p_cogs_mask | p_capex_mask | p_depr_mask
+        p_fixed = round(float(pd.to_numeric(p_act_exp_df.loc[~p_non_fixed_mask, "net_amount"], errors="coerce").sum()) + p_tw_var, 2)
         if p_fixed <= 0:
             p_fixed = round(monthly_fixed * (p_eff_days / 30.4375), 2)
         p_exp_source = "Ledger (Πραγματικά)"
@@ -4827,13 +4849,15 @@ with hub_cfo:
                     st.caption("💶 **Ταμειακή Ροή, Εκκαθάριση ΦΠΑ & Ταμείο Περιόδου**")
                     net_vat_due = round(vat_total - period_vat_expenses, 2)
                     cash_wages_pocket = total_net_pocket_payroll
-                    tot_cash_outflow = round(cash_wages_pocket + period_gross_expenses, 2) if has_actual_expenses else round(total_all_costs * 1.15, 2)
+                    # Αφαίρεση λογιστικής μισθοδοσίας myDATA από τα έξοδα τιμολογίων ώστε να μην διπλουπολογίζεται με τους καθαρούς μισθούς τσέπης
+                    supplier_invoices_gross = round(float(pd.to_numeric(actual_period_exp_df.loc[~sal_mask, "gross_amount"], errors="coerce").sum()), 2) if has_actual_expenses else round(fixed_expenses * 1.24, 2)
+                    tot_cash_outflow = round(cash_wages_pocket + supplier_invoices_gross, 2)
                     real_cash_pocket = round(gross_rev - tot_cash_outflow, 2)
                     st.html(f"""
                     <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(148,163,184,0.2); border-radius: 8px; padding: 12px 16px; font-size: 0.90rem; line-height: 1.6;">
                         <div>• Καθαρά Έξοδα Τιμολογίων: <b>{period_net_expenses:,.2f} €</b> | ΦΠΑ Εισροών: <b style="color:#10b981;">+{period_vat_expenses:,.2f} €</b></div>
-                        <div>• Πληρωμές Τιμολογίων & Φόρων (με ΦΠΑ): <b style="color:#ef4444;">-{period_gross_expenses:,.2f} €</b></div>
-                        <div>• Πληρωμές Καθαρών Μισθών: <b style="color:#ef4444;">-{cash_wages_pocket:,.2f} €</b></div>
+                        <div>• Πληρωμές Τιμολογίων Προμηθευτών & Παγίων (με ΦΠΑ): <b style="color:#ef4444;">-{supplier_invoices_gross:,.2f} €</b></div>
+                        <div>• Πληρωμές Καθαρών Μισθών Προσωπικού: <b style="color:#ef4444;">-{cash_wages_pocket:,.2f} €</b></div>
                         <hr style="margin: 8px 0; border: none; border-top: 1px solid rgba(148,163,184,0.2);">
                         <div>• ΦΠΑ Εσόδων: <b>{vat_total:,.2f} €</b> | <b>Εκτιμώμενος ΦΠΑ προς Απόδοση:</b> <b style="color:{'#f59e0b' if net_vat_due > 0 else '#10b981'};">{net_vat_due:,.2f} €</b></div>
                         <div>• <b>Πραγματικό Ταμειακό Περίσσευμα (Cash Surplus):</b> <b style="color:{'#10b981' if real_cash_pocket > 0 else '#ef4444'}; font-size: 1.02rem;">{real_cash_pocket:+,.2f} €</b></div>
@@ -6151,6 +6175,7 @@ with hub_admin:
                         if df_services_db.empty:
                             seed_initial_catalog()
                             df_staff_db, df_services_db, df_expenses_db, df_bookings_db, db_schedules, db_app_settings, df_payroll_db, df_expenses_ledger_db = load_all_db_data()
+                            monthly_fixed = float(df_expenses_db['amount'].sum()) if (df_expenses_db is not None and not df_expenses_db.empty and 'amount' in df_expenses_db.columns) else 1050.0
 
                         with st.spinner("Χρονολογική ένωση, ταυτοποίηση πελατών και αποθήκευση..."):
                             existing_for_first_visit = df_bookings_db if upload_mode.startswith("➕") else pd.DataFrame()
