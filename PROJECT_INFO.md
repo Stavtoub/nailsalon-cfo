@@ -21,12 +21,15 @@
 
 ## 🔄 2. How Cloud Deployment Works
 
+> [!IMPORTANT]
+> **MANDATORY RULE:** The user **NEVER** tests or runs the app locally. Every modification must be pushed directly to GitHub via `python sync_github.py` at the end of every task so that Streamlit Community Cloud auto-deploys to production.
+
 The live cloud application on Streamlit Cloud is linked directly to GitHub:
-$$\text{Local Code } (\texttt{app.py}) \longrightarrow \text{GitHub } (\texttt{Stavtoub/nailsalon-cfo}) \xrightarrow{\text{Auto-Sync}} \text{Streamlit Cloud (Live Web App)}$$
+$$\text{Local Code } (\texttt{app.py}) \xrightarrow{\texttt{sync\_github.py}} \text{GitHub } (\texttt{Stavtoub/nailsalon-cfo}) \xrightarrow{\text{Auto-Sync}} \text{Streamlit Cloud (Live Web App)}$$
 
 Whenever code changes are made locally to [`app.py`](app.py):
-1. **Local testing:** Verified locally at `http://localhost:8501`.
-2. **Push to Cloud:** The updated `app.py` is uploaded/committed to [`https://github.com/Stavtoub/nailsalon-cfo`](https://github.com/Stavtoub/nailsalon-cfo).
+1. **Local verification:** Syntax & unit logic checked with scratch scripts.
+2. **Auto-Push to Cloud:** Execute `python sync_github.py` to push changes to [`https://github.com/Stavtoub/nailsalon-cfo`](https://github.com/Stavtoub/nailsalon-cfo).
 3. **Auto-Deploy:** Streamlit Community Cloud automatically detects the new commit on `main` and rebuilds the live application in ~30–60 seconds.
 
 ---
