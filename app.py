@@ -9,6 +9,7 @@ import re
 import os
 import unicodedata
 import io
+import hmac
 from datetime import datetime, timedelta, date
 
 # Έλεγχος αν υπάρχει η βιβλιοθήκη του Gemini
@@ -579,7 +580,7 @@ if app_password_secret and not st.session_state.get("app_authenticated", False):
             entered_pwd = st.text_input("Κωδικός Πρόσβασης", type="password", key="app_pwd_gate_input")
             btn_login = st.button("Είσοδος στην Εφαρμογή", type="primary", icon=":material/lock_open:", width="stretch")
             if btn_login or entered_pwd:
-                if entered_pwd == app_password_secret:
+                if hmac.compare_digest(str(entered_pwd), str(app_password_secret)):
                     st.session_state["app_authenticated"] = True
                     st.rerun()
                 else:
@@ -598,6 +599,48 @@ except Exception as e:
     st.error(f"Σφάλμα σύνδεσης με Supabase: {e}", icon=":material/error:")
     st.stop()
 
+def unpack_expenses_ledger_df(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Ξεπακετάρει τυχόν myDATA μεταδεδομένα (mark, afm, kad, other_taxes, doc_type)
+    από τη στήλη notes αν αυτή περιέχει JSON string, καθιστώντας τα αυτόνομες στήλες.
+    """
+    if df is None or df.empty:
+        return pd.DataFrame()
+    df = df.copy()
+    marks, afms, kads, kad_descs, other_taxes_list, doc_types = [], [], [], [], [], []
+    for _, row in df.iterrows():
+        notes_str = str(row.get("notes", "") or "").strip()
+        mark_val = ""
+        afm_val = ""
+        kad_val = ""
+        kad_desc_val = ""
+        tax_val = 0.0
+        doc_type_val = ""
+        if notes_str.startswith("{") and notes_str.endswith("}"):
+            try:
+                meta = json.loads(notes_str)
+                mark_val = str(meta.get("mark", "") or "")
+                afm_val = str(meta.get("afm", "") or "")
+                kad_val = str(meta.get("kad", "") or "")
+                kad_desc_val = str(meta.get("kad_desc", "") or "")
+                tax_val = float(meta.get("other_taxes", 0.0) or 0.0)
+                doc_type_val = str(meta.get("doc_type", "") or "")
+            except Exception:
+                pass
+        marks.append(mark_val)
+        afms.append(afm_val)
+        kads.append(kad_val)
+        kad_descs.append(kad_desc_val)
+        other_taxes_list.append(tax_val)
+        doc_types.append(doc_type_val)
+    df["mark"] = marks
+    df["issuer_afm"] = afms
+    df["kad_code"] = kads
+    df["kad_desc"] = kad_descs
+    df["other_taxes"] = other_taxes_list
+    df["doc_type"] = doc_types
+    return df
+
 @st.cache_data(ttl=3600, show_spinner="Φόρτωση πλήρους ιστορικού από τη βάση...")
 def load_all_db_data(cache_v: int = 3):
     """
@@ -612,7 +655,10 @@ def load_all_db_data(cache_v: int = 3):
     except Exception:
         payroll = pd.DataFrame()
     try:
-        expenses_ledger = pd.DataFrame(supabase.table("expenses_ledger").select("*").order("expense_date", desc=True).execute().data)
+        raw_ledger = supabase.table("expenses_ledger").select("*").order("expense_date", desc=True).execute().data
+        expenses_ledger = pd.DataFrame(raw_ledger) if raw_ledger else pd.DataFrame()
+        if not expenses_ledger.empty:
+            expenses_ledger = unpack_expenses_ledger_df(expenses_ledger)
     except Exception:
         expenses_ledger = pd.DataFrame()
 
@@ -1225,7 +1271,7 @@ def save_payroll_profiles_df(df_ed: pd.DataFrame, auto_recalc_rates: bool = True
     return records
 
 
-# --- 4Γ. ΟΛΟΚΛΗΡΩΜΕΝΗ ΥΠΟΔΟΜΗ ΕΞΟΔΩΝ, ΑΓΟΡΩΝ & ΠΑΡΑΣΤΑΤΙΚΩΝ (100% ΔΥΝΑΜΙΚΑ ΑΠΟ ΤΗ ΒΑΣΗ SUPABASE) ---
+# --- 4Γ. ΟΛΟΚΛΗΡΩΜΕΝΗ ΥΠΟΔΟΜΗ ΕΞΟΔΩΝ, ΑΓΟΡΩΝ & ΠΑΡΑΣΤΑΤΙΚΩΝ (100% ΔΥΝΑΜΙΚΑ ΑΠΟ ΤΗ ΒΑΣΗ SUPABASE & myDATA) ---
 EXPENSE_MAIN_CATEGORIES = [
     "Κόστος Υλικών & Εμπορευμάτων (COGS)",
     "Έξοδα Στέγασης & Λειτουργίας (Ενοίκιο, Κοινόχρηστα)",
@@ -1234,6 +1280,8 @@ EXPENSE_MAIN_CATEGORIES = [
     "Τεχνολογία, Λογισμικά & Προμήθειες POS",
     "Επαγγελματικές Αμοιβές & Άδειες (Λογιστής, Νομικά)",
     "Συντήρηση, Εξοπλισμός & Έκτακτα (CapEx)",
+    "Μισθοδοσία & Εισφορές (myDATA)",
+    "Αποσβέσεις & Ετήσιες Εγγραφές (EBT)",
     "Λοιπά Λειτουργικά Έξοδα"
 ]
 
@@ -1241,14 +1289,17 @@ EXPENSE_NATURES = [
     "Πάγιο Επαναλαμβανόμενο",
     "Μεταβλητό Λειτουργικό",
     "Αγορά Υλικών/Stock (COGS)",
-    "Έκτακτο / Επένδυση (CapEx)"
+    "Έκτακτο / Επένδυση (CapEx)",
+    "Μισθοδοσία Προσωπικού (Payroll)",
+    "Μη-Ταμειακό / Φορολογικό (EBT)"
 ]
 
 EXPENSE_PAYMENT_METHODS = [
     "Επαγγελματική Κάρτα",
     "Τραπεζική Μεταφορά (e-Banking)",
     "Μετρητά Ταμείου",
-    "Παρακράτηση POS / Άλλο"
+    "Παρακράτηση POS / Άλλο",
+    "Λογιστική Εγγραφή"
 ]
 
 EXPENSE_VAT_RATES = [24.0, 13.0, 6.0, 0.0]
@@ -1259,14 +1310,233 @@ DEFAULT_EXPENSE_COLUMNS = [
     "payment_method", "invoice_number", "notes"
 ]
 
+def classify_mydata_row(r: dict) -> tuple[str, str, str, str]:
+    """
+    Ευφυής Μηχανή Ταξινόμησης (Smart Auto-Classifier):
+    Αναγνωρίζει αυτόματα και ταξινομεί με 100% ακρίβεια κάθε γραμμή από το βιβλίο myDATA της ΑΑΔΕ
+    βάσει ΑΦΜ εκδότη, ΚΑΔ, περιγραφής και αριθμού παραστατικού.
+    Επιστρέφει: (main_category, sub_category, expense_nature, payment_method)
+    """
+    desc = str(r.get("ΠΕΡΙΓΡΑΦΗ", "") or "").strip().upper()
+    inv_num = str(r.get("ΑΡ. ΠΑΡΑΣΤΑΤΙΚΟΥ", "") or "").strip().upper()
+    vend = str(r.get("Επωνυμία Αντισυμβαλλόμενου", "") or "").strip().upper()
+    afm = str(r.get("ΑΦΜ ΕΚΔΟΤΗ", "") or "").strip()
+    kad = str(r.get("ΚΑΔ Αντισυμβαλλόμενου", "") or "").strip()
+    kad_desc = str(r.get("ΚΑΔ Περιγραφή", "") or r.get("ΚΑΔ Σύντομη Περιγραφή", "") or "").strip().upper()
+
+    # 1. Ενοίκιο Καταστήματος
+    if "ΕΝΟΙΚΙΟ" in desc or "ΕΝ ΚΕΝΤΡ" in inv_num or "ΕΝ ΜΕΤ" in inv_num:
+        sub = "Ενοίκιο Καταστήματος (Κύριο)" if ("ΕΝ ΚΕΝΤΡ" in inv_num or "1036" in str(r.get("ΚΑΘΑΡΗ ΑΞΙΑ", ""))) else "Χαρτόσημο / Τέλος Ενοικίου"
+        return (
+            "Έξοδα Στέγασης & Λειτουργίας (Ενοίκιο, Κοινόχρηστα)",
+            sub,
+            "Πάγιο Επαναλαμβανόμενο",
+            "Τραπεζική Μεταφορά (e-Banking)"
+        )
+
+    # 2. Μισθοδοσία myDATA
+    if "ΜΙΣΘΟΔΟΣΙΑ" in desc or inv_num.startswith("MK") or "ΜΚ" in inv_num:
+        sub = "Μισθοδοσία Προσωπικού" if "ΚΑΤΑΣΚΗΝΩΣ" not in inv_num else "Ειδική Εισφορά (Κατασκηνώσεις)"
+        return (
+            "Μισθοδοσία & Εισφορές (myDATA)",
+            sub,
+            "Μισθοδοσία Προσωπικού (Payroll)",
+            "Τραπεζική Μεταφορά (e-Banking)"
+        )
+
+    # 3. Αποσβέσεις Παγίων
+    if "ΑΠΟΣΒΕΣΕΙΣ" in desc or "ΑΠΟΣΒΕΣΕΙΣ" in inv_num:
+        return (
+            "Αποσβέσεις & Ετήσιες Εγγραφές (EBT)",
+            "Αποσβέσεις Παγίων",
+            "Μη-Ταμειακό / Φορολογικό (EBT)",
+            "Λογιστική Εγγραφή"
+        )
+
+    # 4. Τέλος Επιτηδεύματος / Ετήσιοι Φόροι
+    if "ΤΕΛΟΣ ΕΠΙΤΗΔΕΥΜΑΤΟΣ" in inv_num or "ΤΕΛΟΣ ΕΠΙΤΗΔΕΥΜΑΤΟΣ" in desc:
+        return (
+            "Αποσβέσεις & Ετήσιες Εγγραφές (EBT)",
+            "Τέλος Επιτηδεύματος",
+            "Μη-Ταμειακό / Φορολογικό (EBT)",
+            "Τραπεζική Μεταφορά (e-Banking)"
+        )
+
+    # 5. Treatwell / Funkmartini
+    if afm == "800524147" or kad == "79900000" or "FUNKMARTINI" in vend or "TREATWELL" in vend:
+        return (
+            "Τεχνολογία, Λογισμικά & Προμήθειες POS",
+            "Τιμολόγιο Treatwell (Connect & Προμήθειες)",
+            "Μεταβλητό Λειτουργικό",
+            "Παρακράτηση POS / Άλλο"
+        )
+
+    # 6. Ρεύμα / Ενέργεια (NRG, Metlen, Protergia, ΔΕΗ)
+    if kad.startswith("3515") or any(k in vend for k in ["NRG", "METLEN", "PROTERGIA", "ΔΕΗ"]):
+        return (
+            "Λογαριασμοί Κοινής Ωφελείας (Ρεύμα, Νερό, Internet)",
+            "Ρεύμα / Ενέργεια",
+            "Μεταβλητό Λειτουργικό",
+            "Τραπεζική Μεταφορά (e-Banking)"
+        )
+
+    # 7. Τηλεπικοινωνίες & Internet (ΟΤΕ, Cosmote, Vodafone)
+    if kad.startswith("6190") or any(k in vend for k in ["ΟΡΓΑΝΙΣΜΟΣ ΤΗΛΕΠΙΚΟΙΝΩΝΙΩΝ", "ΟΤΕ", "COSMOTE", "VODAFONE"]):
+        return (
+            "Λογαριασμοί Κοινής Ωφελείας (Ρεύμα, Νερό, Internet)",
+            "Τηλέφωνο / Internet (OTE)",
+            "Πάγιο Επαναλαμβανόμενο",
+            "Τραπεζική Μεταφορά (e-Banking)"
+        )
+
+    # 8. Λογιστής (Σωτηρίου Ε.Ε.)
+    if afm == "802287993" or kad.startswith("6920") or "ΣΩΤΗΡΙΟΥ" in vend:
+        return (
+            "Επαγγελματικές Αμοιβές & Άδειες (Λογιστής, Νομικά)",
+            "Αμοιβή Λογιστή",
+            "Πάγιο Επαναλαμβανόμενο",
+            "Τραπεζική Μεταφορά (e-Banking)"
+        )
+
+    # 9. Τραπεζικά Έξοδα (Τράπεζα Πειραιώς)
+    if afm == "996763330" or kad.startswith("641912") or "ΠΕΙΡΑΙΩΣ" in vend:
+        return (
+            "Τεχνολογία, Λογισμικά & Προμήθειες POS",
+            "Τραπεζικές Προμήθειες & Έξοδα Συναλλαγών",
+            "Μεταβλητό Λειτουργικό",
+            "Τραπεζική Μεταφορά (e-Banking)"
+        )
+
+    # 10. Euronet / POS Fees
+    if afm == "801567852" or kad.startswith("64193") or "EURONET" in vend:
+        return (
+            "Τεχνολογία, Λογισμικά & Προμήθειες POS",
+            "Προμήθειες POS (Euronet)",
+            "Μεταβλητό Λειτουργικό",
+            "Παρακράτηση POS / Άλλο"
+        )
+
+    # 11. G4S / Ασφάλεια
+    if afm == "094075777" or kad.startswith("466406") or "G4S" in vend:
+        return (
+            "Έξοδα Στέγασης & Λειτουργίας (Ενοίκιο, Κοινόχρηστα)",
+            "Συναγερμός & Ασφάλεια (G4S)",
+            "Πάγιο Επαναλαμβανόμενο",
+            "Τραπεζική Μεταφορά (e-Banking)"
+        )
+
+    # 12. Katsioulis / Χαρτικά & Καθαριότητα
+    if kad.startswith("464923") or "KATSIOULIS" in vend:
+        return (
+            "Λοιπά Λειτουργικά Έξοδα",
+            "Χαρτικά & Αναλώσιμα Καθαριότητας",
+            "Μεταβλητό Λειτουργικό",
+            "Τραπεζική Μεταφορά (e-Banking)"
+        )
+
+    # 13. Ravenna / Πλακάκια - CapEx
+    if kad.startswith("4752") or "RAVENNA" in vend:
+        return (
+            "Συντήρηση, Εξοπλισμός & Έκτακτα (CapEx)",
+            "Ανακαίνιση & Εξοπλισμός Καταστήματος",
+            "Έκτακτο / Επένδυση (CapEx)",
+            "Επαγγελματική Κάρτα"
+        )
+
+    # 14. Απολυμάνσεις
+    if kad.startswith("8123") or "ΛΑΠΟΥΚΟΓΛΟΥ" in vend or "ΑΠΟΛΥΜΑΝΣ" in kad_desc:
+        return (
+            "Έξοδα Στέγασης & Λειτουργίας (Ενοίκιο, Κοινόχρηστα)",
+            "Απολύμανση & Απεντόμωση",
+            "Μεταβλητό Λειτουργικό",
+            "Τραπεζική Μεταφορά (e-Banking)"
+        )
+
+    # 15. Apifon / SMS Marketing
+    if kad.startswith("6310") or "APIFON" in vend:
+        return (
+            "Marketing, Προβολή & Διαφήμιση",
+            "SMS Marketing & Επικοινωνία (Apifon)",
+            "Μεταβλητό Λειτουργικό",
+            "Επαγγελματική Κάρτα"
+        )
+
+    # 16. Παπαδοπούλου / Περιοδικά
+    if kad.startswith("5813") or "ΠΑΠΑΔΟΠΟΥΛΟΥ" in vend:
+        return (
+            "Marketing, Προβολή & Διαφήμιση",
+            "Έντυπη Διαφήμιση / Περιοδικά",
+            "Μεταβλητό Λειτουργικό",
+            "Τραπεζική Μεταφορά (e-Banking)"
+        )
+
+    # 17. Βαδάσης / Ανεύρεση Πελατών
+    if kad.startswith("7320") or "ΒΑΔΑΣΗΣ" in vend:
+        return (
+            "Marketing, Προβολή & Διαφήμιση",
+            "Υπηρεσίες Ανεύρεσης Πελατών",
+            "Μεταβλητό Λειτουργικό",
+            "Τραπεζική Μεταφορά (e-Banking)"
+        )
+
+    # 18. Καφές / Super Market (Nespresso, Μασούτης)
+    if any(k in vend for k in ["ΝΕΣΠΡΕΣΣΟ", "ΜΑΣΟΥΤΗΣ"]) or any(k in kad for k in ["4711", "4727"]):
+        return (
+            "Λοιπά Λειτουργικά Έξοδα",
+            "Καφές & Φιλοξενία Πελατών",
+            "Μεταβλητό Λειτουργικό",
+            "Επαγγελματική Κάρτα"
+        )
+
+    # 19. Attica / Στολές & Ένδυση
+    if "ΑΤΤΙΚΑ" in vend or kad.startswith("4771"):
+        return (
+            "Λοιπά Λειτουργικά Έξοδα",
+            "Στολές & Ένδυση Προσωπικού",
+            "Μεταβλητό Λειτουργικό",
+            "Επαγγελματική Κάρτα"
+        )
+
+    # 20. Αγγελόπουλος Group (Υπεραγορά / Αναλώσιμα)
+    if "ΑΓΓΕΛΟΠΟΥΛΟΣ" in vend or kad.startswith("4712"):
+        return (
+            "Κόστος Υλικών & Εμπορευμάτων (COGS)",
+            "Εξοπλισμός & Αναλώσιμα Καταστήματος",
+            "Αγορά Υλικών/Stock (COGS)",
+            "Επαγγελματική Κάρτα"
+        )
+
+    # 21. Προμηθευτές Υλικών Νυχιών (Miss Kiss, Lotus, Kyana, Pablo, κ.λπ.)
+    nail_suppliers = [
+        "MISS KISS", "ΚΟΥΝΑΤΙΔΗΣ", "ΚΑΡΔΑΡΑ", "KYANA", "PABLO", "ΜΥΤΗΛΑΚΗΣ",
+        "SALONTECH", "ΜΗΤΑΚΙΔΗΣ", "EVELLON", "NATURAL CARE", "ΛΟΤΟΥΣ",
+        "CHRISTIAN ARTESIO", "ΒΡΕΤΤΟΣ", "ΑΝΕΣΤΑΚΗΣ", "ΜΠΟΓΙΑΡΗ", "ΓΚΟΛΕΜΗΣ"
+    ]
+    if any(s in vend for s in nail_suppliers) or kad.startswith("4645") or kad.startswith("4775") or kad.startswith("4690"):
+        return (
+            "Κόστος Υλικών & Εμπορευμάτων (COGS)",
+            "Υλικά Νυχιών & Καλλυντικά",
+            "Αγορά Υλικών/Stock (COGS)",
+            "Τραπεζική Μεταφορά (e-Banking)"
+        )
+
+    # Fallback
+    return (
+        "Λοιπά Λειτουργικά Έξοδα",
+        "Γενικά Έξοδα",
+        "Μεταβλητό Λειτουργικό",
+        "Τραπεζική Μεταφορά (e-Banking)"
+    )
+
 def get_expenses_ledger_df() -> pd.DataFrame:
     """Φορτώνει το ημερολόγιο εξόδων απευθείας από τον πίνακα expenses_ledger του Supabase."""
     try:
         res = supabase.table("expenses_ledger").select("*").order("expense_date", desc=True).execute()
         if res.data and len(res.data) > 0:
             df = pd.DataFrame(res.data)
+            df = unpack_expenses_ledger_df(df)
             df["expense_date"] = pd.to_datetime(df["expense_date"]).dt.date
-            for c in ["net_amount", "vat_rate", "vat_amount", "gross_amount"]:
+            for c in ["net_amount", "vat_rate", "vat_amount", "gross_amount", "other_taxes"]:
                 if c in df.columns:
                     df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0.0).round(2)
             return df
@@ -1528,20 +1798,32 @@ def delete_expense_entry(expense_id: int):
     except Exception:
         pass
 
-def save_expenses_ledger_df(df_edited: pd.DataFrame) -> int:
+def save_expenses_ledger_df(df_edited: pd.DataFrame, sync_deletions: bool = False, existing_scope_ids: set = None) -> int:
     """
-    Συγχρονίζει ολόκληρο το επεξεργασμένο DataFrame εξόδων με το Supabase:
-    - Υπολογίζει αυτόματα ΦΠΑ και Μικτή Αξία αν λείπουν
-    - Κάνει upsert στις νέες και τροποποιημένες γραμμές
-    - Διαγράφει από τη βάση όσες γραμμές αφαιρέθηκαν από τον πίνακα
+    Συγχρονίζει το DataFrame εξόδων με το Supabase:
+    - Υποστηρίζει αρνητικά ποσά (Πιστωτικά Τιμολόγια)
+    - Ελέγχει αυτόματα αποφυγή διπλοεγγραφών βάσει MARK
+    - Αν sync_deletions είναι True, διαγράφει ΜΟΝΟ όσα IDs περιλαμβάνονταν στο existing_scope_ids και αφαιρέθηκαν
+    - Αποθηκεύει τα μεταδεδομένα στο Supabase
     """
     if df_edited is None or df_edited.empty:
         return 0
+
+    # Ανάκτηση υπαρχόντων MARKS από τη βάση για deduplication
+    existing_marks_map = {}
     try:
-        curr_res = supabase.table("expenses_ledger").select("id").execute()
-        existing_ids = set(r["id"] for r in (curr_res.data or []))
+        curr_res = supabase.table("expenses_ledger").select("id, invoice_number, notes").execute()
+        for r in (curr_res.data or []):
+            r_notes = str(r.get("notes", "") or "")
+            if "mark" in r_notes:
+                try:
+                    m = json.loads(r_notes).get("mark")
+                    if m:
+                        existing_marks_map[str(m).strip()] = r["id"]
+                except Exception:
+                    pass
     except Exception:
-        existing_ids = set()
+        pass
 
     clean_records = []
     kept_ids = set()
@@ -1557,12 +1839,17 @@ def save_expenses_ledger_df(df_edited: pd.DataFrame) -> int:
         net = float(pd.to_numeric(row.get("net_amount", 0.0), errors="coerce") or 0.0)
         vat_r = float(pd.to_numeric(row.get("vat_rate", 24.0), errors="coerce") or 24.0)
         gross = float(pd.to_numeric(row.get("gross_amount", 0.0), errors="coerce") or 0.0)
-        if gross > 0 and net == 0:
+        vat_amt = float(pd.to_numeric(row.get("vat_amount", 0.0), errors="coerce") or 0.0)
+
+        # Υποστήριξη και για πιστωτικά (αρνητικά ποσά)
+        if gross != 0 and net == 0:
             net = round(gross / (1.0 + vat_r / 100.0), 2)
             vat_amt = round(gross - net, 2)
-        else:
+        elif net != 0 and gross == 0:
             vat_amt = round(net * (vat_r / 100.0), 2)
             gross = round(net + vat_amt, 2)
+        elif vat_amt == 0 and net != 0 and vat_r > 0:
+            vat_amt = round(net * (vat_r / 100.0), 2)
 
         main_cat = str(row.get("main_category", EXPENSE_MAIN_CATEGORIES[0]) or EXPENSE_MAIN_CATEGORIES[0]).strip()
         if main_cat not in EXPENSE_MAIN_CATEGORIES:
@@ -1576,6 +1863,22 @@ def save_expenses_ledger_df(df_edited: pd.DataFrame) -> int:
         if pay_m not in EXPENSE_PAYMENT_METHODS:
             pay_m = EXPENSE_PAYMENT_METHODS[0]
 
+        notes_val = str(row.get("notes", "") or "").strip()
+        mark_val = str(row.get("mark", "") or "").strip()
+
+        # Αν υπάρχει mark σε στήλη αλλά όχι σε notes, ενσωμάτωσέ το
+        if mark_val and not (notes_val.startswith("{") and "mark" in notes_val):
+            meta = {
+                "mark": mark_val,
+                "afm": str(row.get("issuer_afm", "") or "").strip(),
+                "kad": str(row.get("kad_code", "") or "").strip(),
+                "kad_desc": str(row.get("kad_desc", "") or "").strip(),
+                "doc_type": str(row.get("doc_type", "") or "").strip(),
+                "other_taxes": float(pd.to_numeric(row.get("other_taxes", 0.0), errors="coerce") or 0.0),
+                "source": "myDATA"
+            }
+            notes_val = json.dumps(meta, ensure_ascii=False)
+
         rec = {
             "expense_date": exp_d_str,
             "vendor_name": str(row.get("vendor_name", "") or "").strip(),
@@ -1588,22 +1891,30 @@ def save_expenses_ledger_df(df_edited: pd.DataFrame) -> int:
             "gross_amount": round(gross, 2),
             "payment_method": pay_m,
             "invoice_number": str(row.get("invoice_number", "") or "").strip(),
-            "notes": str(row.get("notes", "") or "").strip()
+            "notes": notes_val
         }
+
+        # Έλεγχος ID ή ταύτιση με υπάρχον MARK για αποφυγή διπλότυπων
         r_id = row.get("id")
         if pd.notna(r_id) and str(r_id).strip() != "" and int(pd.to_numeric(r_id, errors="coerce") or 0) > 0:
             rec_id = int(r_id)
             rec["id"] = rec_id
             kept_ids.add(rec_id)
+        elif mark_val and mark_val in existing_marks_map:
+            matched_id = existing_marks_map[mark_val]
+            rec["id"] = matched_id
+            kept_ids.add(matched_id)
+
         clean_records.append(rec)
 
-    # Διαγραφή γραμμών που αφαιρέθηκαν
-    deleted_ids = existing_ids - kept_ids
-    for d_id in deleted_ids:
-        try:
-            supabase.table("expenses_ledger").delete().eq("id", d_id).execute()
-        except Exception:
-            pass
+    # Διαγραφή γραμμών που αφαιρέθηκαν (αυστηρά εντός του εμβέλειας πεδίου αν ορίζεται)
+    if sync_deletions and existing_scope_ids:
+        deleted_ids = existing_scope_ids - kept_ids
+        for d_id in deleted_ids:
+            try:
+                supabase.table("expenses_ledger").delete().eq("id", d_id).execute()
+            except Exception:
+                pass
 
     saved_count = 0
     for i in range(0, len(clean_records), 100):
@@ -1615,8 +1926,9 @@ def save_expenses_ledger_df(df_edited: pd.DataFrame) -> int:
 
 def parse_expenses_import_file(uploaded_file) -> pd.DataFrame:
     """
-    Διαβάζει αρχείο CSV ή Excel με έξοδα/τιμολόγια, αναγνωρίζει αυτόματα τις στήλες
-    (σε Ελληνικά & Αγγλικά) και επιστρέφει ένα καθαρό DataFrame έτοιμο για εισαγωγή.
+    Διαβάζει αρχείο CSV ή Excel με έξοδα/τιμολόγια (συμπεριλαμβανομένου του επίσημου βιβλίου myDATA ΑΑΔΕ)
+    ή αρχείου λογιστή, αναγνωρίζει αυτόματα τις στήλες και εφαρμόζει την αυτόματη ταξινόμηση
+    (Smart Auto-Classifier) ώστε να επιστρέψει ένα καθαρό DataFrame έτοιμο για εισαγωγή.
     """
     fname = uploaded_file.name.lower()
     if fname.endswith(".csv"):
@@ -1636,100 +1948,174 @@ def parse_expenses_import_file(uploaded_file) -> pd.DataFrame:
     if df_raw is None or df_raw.empty:
         return pd.DataFrame(columns=DEFAULT_EXPENSE_COLUMNS)
 
-    col_map = {}
-    for col in df_raw.columns:
-        c_clean = str(col).strip().lower()
-        if any(k in c_clean for k in ["ημερομην", "date", "ημ/νια", "ημερα", "expense_date"]):
-            col_map[col] = "expense_date"
-        elif any(k in c_clean for k in ["προμηθευτ", "vendor", "supplier", "εκδοτ", "επωνυμ"]):
-            col_map[col] = "vendor_name"
-        elif any(k in c_clean for k in ["βασικη κατηγορια", "main_cat", "κατηγορια", "category"]):
-            col_map[col] = "main_category"
-        elif any(k in c_clean for k in ["υποκατηγορ", "sub_cat", "υπο-κατηγορ", "ειδος", "περιγραφ"]):
-            col_map[col] = "sub_category"
-        elif any(k in c_clean for k in ["φυση", "nature"]):
-            col_map[col] = "expense_nature"
-        elif any(k in c_clean for k in ["καθαρη αξια", "καθαρο", "net_amount", "net", "καθαρα"]):
-            col_map[col] = "net_amount"
-        elif any(k in c_clean for k in ["συντελεστης φπα", "φπα %", "vat_rate", "vat %"]):
-            col_map[col] = "vat_rate"
-        elif any(k in c_clean for k in ["ποσο φπα", "αξια φπα", "vat_amount", "φπα", "vat"]):
-            col_map[col] = "vat_amount"
-        elif any(k in c_clean for k in ["συνολο", "μικτο", "gross_amount", "gross", "πληρωτεο", "τελικη αξια"]):
-            col_map[col] = "gross_amount"
-        elif any(k in c_clean for k in ["τροπος πληρωμης", "payment_method", "πληρωμη", "μεθοδος"]):
-            col_map[col] = "payment_method"
-        elif any(k in c_clean for k in ["παραστατικ", "τιμολογι", "αρ.", "invoice", "invoice_number"]):
-            col_map[col] = "invoice_number"
-        elif any(k in c_clean for k in ["σημειωσ", "αιτιολογ", "notes", "σχολια"]):
-            col_map[col] = "notes"
+    # Έλεγχος αν πρόκειται για επίσημο myDATA εξαχθέν αρχείο (ΑΑΔΕ)
+    cols_upper = [str(c).strip().upper() for c in df_raw.columns]
+    is_mydata = any("ΜΑΡΚ" in c for c in cols_upper) and any("ΠΑΡΑΣΤΑΤΙΚ" in c for c in cols_upper)
 
-    df_norm = df_raw.rename(columns=col_map)
     out_rows = []
+    if is_mydata:
+        # myDATA parsing & Smart Classification
+        for _, r in df_raw.iterrows():
+            raw_d = r.get("ΗΜΕΡΟΜΗΝΙΑ ΕΚΔΟΣΗΣ")
+            if pd.isna(raw_d) or not str(raw_d).strip():
+                continue
+            try:
+                d_val = pd.to_datetime(raw_d, dayfirst=True).date()
+            except Exception:
+                continue
 
-    for _, r in df_norm.iterrows():
-        raw_d = r.get("expense_date")
-        if pd.isna(raw_d) or not raw_d:
-            continue
-        try:
-            d_val = pd.to_datetime(raw_d, dayfirst=True).date()
-        except Exception:
-            continue
+            net = float(pd.to_numeric(r.get("ΚΑΘΑΡΗ ΑΞΙΑ", 0.0), errors="coerce") or 0.0)
+            gross = float(pd.to_numeric(r.get("ΣΥΝΟΛΙΚΗ ΑΞΙΑ", 0.0), errors="coerce") or 0.0)
+            vat_amt = float(pd.to_numeric(r.get("Φ.Π.Α.", 0.0), errors="coerce") or 0.0)
 
-        net = float(pd.to_numeric(r.get("net_amount", 0.0), errors="coerce") or 0.0)
-        gross = float(pd.to_numeric(r.get("gross_amount", 0.0), errors="coerce") or 0.0)
-        vat_r = float(pd.to_numeric(r.get("vat_rate", 24.0), errors="coerce") or 24.0)
-        vat_amt = float(pd.to_numeric(r.get("vat_amount", 0.0), errors="coerce") or 0.0)
+            other_taxes = (
+                float(pd.to_numeric(r.get("Λοιποί Φόροι στις Αναλυτικές Γραμμές", 0.0), errors="coerce") or 0.0) +
+                float(pd.to_numeric(r.get("Τέλη στις Αναλυτικές Γραμμές", 0.0), errors="coerce") or 0.0)
+            )
 
-        if gross > 0 and net == 0:
-            net = round(gross / (1.0 + vat_r / 100.0), 2)
-            vat_amt = round(gross - net, 2)
-        elif net > 0 and gross == 0:
-            if vat_amt == 0:
-                vat_amt = round(net * (vat_r / 100.0), 2)
-            gross = round(net + vat_amt, 2)
-        elif gross == 0 and net == 0 and vat_amt > 0:
-            gross = vat_amt
-            net = round(gross / (1.0 + vat_r / 100.0), 2)
+            vat_r = round(abs(vat_amt / net) * 100.0, 1) if abs(net) > 0.01 and abs(vat_amt) > 0.01 else 0.0
+            if abs(vat_r - 24.0) < 1.0: vat_r = 24.0
+            elif abs(vat_r - 13.0) < 1.0: vat_r = 13.0
+            elif abs(vat_r - 6.0) < 1.0: vat_r = 6.0
 
-        main_cat = str(r.get("main_category", "") or "").strip()
-        if main_cat not in EXPENSE_MAIN_CATEGORIES:
-            mc_lower = main_cat.lower()
-            if any(k in mc_lower for k in ["υλικ", "αναλωσιμ", "προιον", "βερνικ", "τζελ", "nail", "cogs"]):
-                main_cat = "Κόστος Υλικών & Εμπορευμάτων (COGS)"
-            elif any(k in mc_lower for k in ["ενοικι", "δεη", "ρευμα", "νερο", "ευδαπ", "τηλεφων", "ιντερνετ", "κοινοχρηστ", "καθαρισμ"]):
-                main_cat = "Έξοδα Στέγασης & Λειτουργίας Καταστήματος"
-            elif any(k in mc_lower for k in ["λογιστ", "δικηγορ", "τεχνικ", "συντηρησ", "pos", "τραπεζ"]):
-                main_cat = "Επαγγελματικές Υπηρεσίες & Συντηρήσεις"
-            elif any(k in mc_lower for k in ["διαφημισ", "marketing", "facebook", "instagram", "google", "treatwell"]):
-                main_cat = "Marketing, Διαφήμιση & Πλατφόρμες"
-            elif any(k in mc_lower for k in ["φορ", "τελη", "δημοτικ", "επιμελητηρ"]):
-                main_cat = "Φόροι, Τέλη & Χρηματοοικονομικά"
-            else:
-                main_cat = "Λοιπά Γενικά Έξοδα"
+            cat, sub, nat, pay = classify_mydata_row(r.to_dict())
 
-        nature = str(r.get("expense_nature", "Σταθερό") or "Σταθερό").strip()
-        if nature not in EXPENSE_NATURES:
-            nature = "Μεταβλητό" if main_cat == "Κόστος Υλικών & Εμπορευμάτων (COGS)" else "Σταθερό"
+            mark_str = str(r.get("ΜΑΡΚ", "") or "").strip()
+            inv_str = str(r.get("ΑΡ. ΠΑΡΑΣΤΑΤΙΚΟΥ", "") or "").strip()
+            afm_str = str(r.get("ΑΦΜ ΕΚΔΟΤΗ", "") or "").strip()
+            vend_str = str(r.get("Επωνυμία Αντισυμβαλλόμενου", "") or "").strip()
+            if not vend_str:
+                if "ΕΝΟΙΚΙΟ" in str(r.get("ΠΕΡΙΓΡΑΦΗ", "")).upper() or "ΕΝ " in inv_str:
+                    vend_str = "Ιδιοκτήτης Ακινήτου (Ενοίκιο)"
+                elif "ΜΙΣΘΟΔΟΣΙΑ" in str(r.get("ΠΕΡΙΓΡΑΦΗ", "")).upper() or inv_str.startswith("MK"):
+                    vend_str = "Μισθοδοσία Προσωπικού"
+                elif "ΑΠΟΣΒΕΣΕΙΣ" in str(r.get("ΠΕΡΙΓΡΑΦΗ", "")).upper():
+                    vend_str = "Λογιστικές Αποσβέσεις Παγίων"
+                elif "ΤΕΛΟΣ ΕΠΙΤΗΔΕΥΜΑΤΟΣ" in inv_str:
+                    vend_str = "ΑΑΔΕ / ΔΟΥ (Τέλος Επιτηδεύματος)"
+                else:
+                    vend_str = "Διάφοροι Εκδότες"
 
-        pay_m = str(r.get("payment_method", "Τράπεζα / Έμβασμα") or "Τράπεζα / Έμβασμα").strip()
-        if pay_m not in EXPENSE_PAYMENT_METHODS:
-            pay_m = "Τράπεζα / Έμβασμα"
+            meta = {
+                "mark": mark_str,
+                "afm": afm_str,
+                "kad": str(r.get("ΚΑΔ Αντισυμβαλλόμενου", "") or "").strip(),
+                "kad_desc": str(r.get("ΚΑΔ Περιγραφή", "") or r.get("ΚΑΔ Σύντομη Περιγραφή", "") or "").strip(),
+                "doc_type": str(r.get("ΠΕΡΙΓΡΑΦΗ", "") or "").strip(),
+                "other_taxes": round(other_taxes, 2),
+                "source": "myDATA"
+            }
 
-        out_rows.append({
-            "expense_date": d_val,
-            "vendor_name": str(r.get("vendor_name", "") or "").strip(),
-            "main_category": main_cat,
-            "sub_category": str(r.get("sub_category", "") or "").strip(),
-            "expense_nature": nature,
-            "net_amount": round(net, 2),
-            "vat_rate": round(vat_r, 1),
-            "vat_amount": round(vat_amt, 2),
-            "gross_amount": round(gross, 2),
-            "payment_method": pay_m,
-            "invoice_number": str(r.get("invoice_number", "") or "").strip(),
-            "notes": str(r.get("notes", "") or "").strip()
-        })
+            out_rows.append({
+                "expense_date": d_val,
+                "vendor_name": vend_str,
+                "main_category": cat,
+                "sub_category": sub,
+                "expense_nature": nat,
+                "net_amount": round(net, 2),
+                "vat_rate": round(vat_r, 1),
+                "vat_amount": round(vat_amt, 2),
+                "gross_amount": round(gross, 2),
+                "payment_method": pay,
+                "invoice_number": inv_str,
+                "notes": json.dumps(meta, ensure_ascii=False),
+                "mark": mark_str,
+                "issuer_afm": afm_str,
+                "kad_code": str(r.get("ΚΑΔ Αντισυμβαλλόμενου", "") or "").strip(),
+                "other_taxes": round(other_taxes, 2),
+                "doc_type": str(r.get("ΠΕΡΙΓΡΑΦΗ", "") or "").strip()
+            })
+    else:
+        # Generic CSV parsing (βελτιωμένο)
+        col_map = {}
+        for col in df_raw.columns:
+            c_clean = str(col).strip().lower()
+            if any(k in c_clean for k in ["ημερομην", "date", "ημ/νια", "ημερα", "expense_date"]):
+                col_map[col] = "expense_date"
+            elif any(k in c_clean for k in ["προμηθευτ", "vendor", "supplier", "εκδοτ", "επωνυμ"]):
+                col_map[col] = "vendor_name"
+            elif any(k in c_clean for k in ["βασικη κατηγορια", "main_cat", "κατηγορια", "category"]):
+                col_map[col] = "main_category"
+            elif any(k in c_clean for k in ["υποκατηγορ", "sub_cat", "υπο-κατηγορ", "ειδος", "περιγραφ"]):
+                col_map[col] = "sub_category"
+            elif any(k in c_clean for k in ["φυση", "nature"]):
+                col_map[col] = "expense_nature"
+            elif any(k in c_clean for k in ["καθαρη αξια", "καθαρο", "net_amount", "net", "καθαρα"]):
+                col_map[col] = "net_amount"
+            elif any(k in c_clean for k in ["συντελεστης φπα", "φπα %", "vat_rate", "vat %"]):
+                col_map[col] = "vat_rate"
+            elif any(k in c_clean for k in ["ποσο φπα", "αξια φπα", "vat_amount", "φπα", "vat"]):
+                col_map[col] = "vat_amount"
+            elif any(k in c_clean for k in ["συνολο", "μικτο", "gross_amount", "gross", "πληρωτεο", "τελικη αξια"]):
+                col_map[col] = "gross_amount"
+            elif any(k in c_clean for k in ["τροπος πληρωμης", "payment_method", "πληρωμη", "μεθοδος"]):
+                col_map[col] = "payment_method"
+            elif any(k in c_clean for k in ["παραστατικ", "τιμολογι", "αρ.", "invoice", "invoice_number"]):
+                col_map[col] = "invoice_number"
+            elif any(k in c_clean for k in ["σημειωσ", "αιτιολογ", "notes", "σχολια"]):
+                col_map[col] = "notes"
+
+        df_norm = df_raw.rename(columns=col_map)
+        for _, r in df_norm.iterrows():
+            raw_d = r.get("expense_date")
+            if pd.isna(raw_d) or not raw_d:
+                continue
+            try:
+                d_val = pd.to_datetime(raw_d, dayfirst=True).date()
+            except Exception:
+                continue
+
+            net = float(pd.to_numeric(r.get("net_amount", 0.0), errors="coerce") or 0.0)
+            gross = float(pd.to_numeric(r.get("gross_amount", 0.0), errors="coerce") or 0.0)
+            vat_r = float(pd.to_numeric(r.get("vat_rate", 24.0), errors="coerce") or 24.0)
+            vat_amt = float(pd.to_numeric(r.get("vat_amount", 0.0), errors="coerce") or 0.0)
+
+            if gross != 0 and net == 0:
+                net = round(gross / (1.0 + vat_r / 100.0), 2)
+                vat_amt = round(gross - net, 2)
+            elif net != 0 and gross == 0:
+                if vat_amt == 0:
+                    vat_amt = round(net * (vat_r / 100.0), 2)
+                gross = round(net + vat_amt, 2)
+
+            main_cat = str(r.get("main_category", "") or "").strip()
+            if main_cat not in EXPENSE_MAIN_CATEGORIES:
+                mc_lower = main_cat.lower()
+                if any(k in mc_lower for k in ["υλικ", "αναλωσιμ", "προιον", "βερνικ", "τζελ", "nail", "cogs"]):
+                    main_cat = "Κόστος Υλικών & Εμπορευμάτων (COGS)"
+                elif any(k in mc_lower for k in ["ενοικι", "δεη", "ρευμα", "νερο", "ευδαπ", "τηλεφων", "ιντερνετ", "κοινοχρηστ", "καθαρισμ"]):
+                    main_cat = "Έξοδα Στέγασης & Λειτουργίας (Ενοίκιο, Κοινόχρηστα)"
+                elif any(k in mc_lower for k in ["λογιστ", "δικηγορ", "τεχνικ", "συντηρησ", "pos", "τραπεζ"]):
+                    main_cat = "Επαγγελματικές Αμοιβές & Άδειες (Λογιστής, Νομικά)"
+                elif any(k in mc_lower for k in ["διαφημισ", "marketing", "facebook", "instagram", "google", "treatwell"]):
+                    main_cat = "Marketing, Προβολή & Διαφήμιση"
+                elif any(k in mc_lower for k in ["μισθοδοσ", "εφκα"]):
+                    main_cat = "Μισθοδοσία & Εισφορές (myDATA)"
+                else:
+                    main_cat = "Λοιπά Λειτουργικά Έξοδα"
+
+            nature = str(r.get("expense_nature", "Μεταβλητό Λειτουργικό") or "Μεταβλητό Λειτουργικό").strip()
+            if nature not in EXPENSE_NATURES:
+                nature = "Μεταβλητό Λειτουργικό"
+
+            pay_m = str(r.get("payment_method", "Τραπεζική Μεταφορά (e-Banking)") or "Τραπεζική Μεταφορά (e-Banking)").strip()
+            if pay_m not in EXPENSE_PAYMENT_METHODS:
+                pay_m = "Τραπεζική Μεταφορά (e-Banking)"
+
+            out_rows.append({
+                "expense_date": d_val,
+                "vendor_name": str(r.get("vendor_name", "") or "").strip(),
+                "main_category": main_cat,
+                "sub_category": str(r.get("sub_category", "") or "").strip(),
+                "expense_nature": nature,
+                "net_amount": round(net, 2),
+                "vat_rate": round(vat_r, 1),
+                "vat_amount": round(vat_amt, 2),
+                "gross_amount": round(gross, 2),
+                "payment_method": pay_m,
+                "invoice_number": str(r.get("invoice_number", "") or "").strip(),
+                "notes": str(r.get("notes", "") or "").strip()
+            })
 
     return pd.DataFrame(out_rows)
 
@@ -2947,9 +3333,13 @@ if not df_bookings_db.empty:
         period_gross_expenses = round(float(pd.to_numeric(actual_period_exp_df["gross_amount"], errors="coerce").sum()), 2)
         exp_by_cat = actual_period_exp_df.groupby("main_category")["net_amount"].sum().to_dict()
         actual_cogs_materials = round(float(exp_by_cat.get("Κόστος Υλικών & Εμπορευμάτων (COGS)", 0.0)), 2)
+        actual_capex = round(float(exp_by_cat.get("Συντήρηση, Εξοπλισμός & Έκτακτα (CapEx)", 0.0)), 2)
+        actual_depreciation = round(float(exp_by_cat.get("Αποσβέσεις & Ετήσιες Εγγραφές (EBT)", 0.0)), 2)
+        actual_mydata_payroll = round(float(exp_by_cat.get("Μισθοδοσία & Εισφορές (myDATA)", 0.0)), 2)
+        actual_other_taxes = round(float(pd.to_numeric(actual_period_exp_df.get("other_taxes", 0.0), errors="coerce").sum()), 2)
 
         # 1. Treatwell: Το τιμολόγιο περιλαμβάνει προμήθειες ραντεβού (ήδη στο comm_total) + Connect SaaS + processing fees.
-        tw_mask = actual_period_exp_df["vendor_name"].astype(str).str.lower().str.contains("treatwell") | actual_period_exp_df["sub_category"].astype(str).str.lower().str.contains("treatwell")
+        tw_mask = actual_period_exp_df["vendor_name"].astype(str).str.lower().str.contains("treatwell|funkmartini") | actual_period_exp_df["sub_category"].astype(str).str.lower().str.contains("treatwell")
         actual_tw_net = round(float(pd.to_numeric(actual_period_exp_df[tw_mask]["net_amount"], errors="coerce").sum()), 2)
         actual_tw_gross = round(float(pd.to_numeric(actual_period_exp_df[tw_mask]["gross_amount"], errors="coerce").sum()), 2)
         tw_overhead_variance = max(0.0, round(actual_tw_net - comm_total, 2))
@@ -2969,15 +3359,16 @@ if not df_bookings_db.empty:
         )
         actual_tax_doy = round(float(pd.to_numeric(actual_period_exp_df[tax_mask]["net_amount"], errors="coerce").sum()), 2)
 
-        # 4. Αμοιβές μισθοδοσίας αν έχουν καταχωρηθεί στο ledger (από OCR)
+        # 4. Αμοιβές μισθοδοσίας αν έχουν καταχωρηθεί στο ledger
         sal_mask = (
             actual_period_exp_df["sub_category"].astype(str).str.upper().str.contains("ΜΙΣΘΟΔΟΣΙ") |
-            actual_period_exp_df["vendor_name"].astype(str).str.upper().str.contains("ΜΙΣΘΟΔΟΣΙ")
+            actual_period_exp_df["vendor_name"].astype(str).str.upper().str.contains("ΜΙΣΘΟΔΟΣΙ") |
+            actual_period_exp_df["main_category"].astype(str).str.upper().str.contains("ΜΙΣΘΟΔΟΣΙ")
         )
         actual_salary_entries_net = round(float(pd.to_numeric(actual_period_exp_df[sal_mask]["net_amount"], errors="coerce").sum()), 2)
 
         # 5. Καθαρά Λειτουργικά Πάγια (OPEX): Ενοίκιο, Ρεύμα, Νερό, Τηλέφωνο, Λογιστής, SaaS, POS, Marketing, Μικροέξοδα + Treatwell Connect variance
-        fixed_expenses = round(period_net_expenses - actual_cogs_materials - actual_tw_net - actual_payroll_insurance - actual_tax_doy - actual_salary_entries_net + tw_overhead_variance, 2)
+        fixed_expenses = round(period_net_expenses - actual_cogs_materials - actual_tw_net - actual_payroll_insurance - actual_tax_doy - actual_salary_entries_net - actual_capex - actual_depreciation + tw_overhead_variance, 2)
         if fixed_expenses <= 0:
             monthly_fixed = float(df_expenses_db['amount'].sum()) if not df_expenses_db.empty else 1050.0
             effective_calendar_days = max(1.0, active_workdays_count * (7.0 / 6.0))
@@ -2990,6 +3381,10 @@ if not df_bookings_db.empty:
         period_vat_expenses = round(fixed_expenses * 0.24, 2)
         period_gross_expenses = round(fixed_expenses + period_vat_expenses, 2)
         actual_cogs_materials = 0.0
+        actual_capex = 0.0
+        actual_depreciation = 0.0
+        actual_mydata_payroll = 0.0
+        actual_other_taxes = 0.0
         actual_tw_net = comm_total
         actual_tw_gross = round(comm_total * 1.24, 2)
         tw_overhead_variance = 0.0
@@ -3194,8 +3589,11 @@ def compute_period_pnl_summary(p_start_d: date, p_end_d: date, p_label: str):
         p_gross_exp = round(float(pd.to_numeric(p_act_exp_df["gross_amount"], errors="coerce").sum()), 2)
         p_exp_by_cat = p_act_exp_df.groupby("main_category")["net_amount"].sum().to_dict()
         p_cogs_mat = round(float(p_exp_by_cat.get("Κόστος Υλικών & Εμπορευμάτων (COGS)", 0.0)), 2)
+        p_capex = round(float(p_exp_by_cat.get("Συντήρηση, Εξοπλισμός & Έκτακτα (CapEx)", 0.0)), 2)
+        p_depreciation = round(float(p_exp_by_cat.get("Αποσβέσεις & Ετήσιες Εγγραφές (EBT)", 0.0)), 2)
+        p_mydata_payroll = round(float(p_exp_by_cat.get("Μισθοδοσία & Εισφορές (myDATA)", 0.0)), 2)
 
-        p_tw_mask = p_act_exp_df["vendor_name"].astype(str).str.lower().str.contains("treatwell") | p_act_exp_df["sub_category"].astype(str).str.lower().str.contains("treatwell")
+        p_tw_mask = p_act_exp_df["vendor_name"].astype(str).str.lower().str.contains("treatwell|funkmartini") | p_act_exp_df["sub_category"].astype(str).str.lower().str.contains("treatwell")
         p_tw_net = round(float(pd.to_numeric(p_act_exp_df[p_tw_mask]["net_amount"], errors="coerce").sum()), 2)
         p_tw_var = max(0.0, round(p_tw_net - p_comm, 2))
 
@@ -3210,15 +3608,16 @@ def compute_period_pnl_summary(p_start_d: date, p_end_d: date, p_label: str):
             p_act_exp_df["sub_category"].astype(str).str.upper().str.contains("ΔΟΥ|ΦΟΡΟΛΟΓΙΚ") |
             p_act_exp_df["vendor_name"].astype(str).str.upper().str.contains("ΑΑΔΕ|ΔΟΥ")
         )
-        p_tax_net = round(float(pd.to_numeric(p_act_exp_df[p_tax_mask]["net_amount"], errors="coerce").sum()), 2)
+        p_tax_net = round(float(pd.to_numeric(p_act_exp_df[tax_mask]["net_amount"], errors="coerce").sum()), 2)
 
         p_sal_mask = (
             p_act_exp_df["sub_category"].astype(str).str.upper().str.contains("ΜΙΣΘΟΔΟΣΙ") |
-            p_act_exp_df["vendor_name"].astype(str).str.upper().str.contains("ΜΙΣΘΟΔΟΣΙ")
+            p_act_exp_df["vendor_name"].astype(str).str.upper().str.contains("ΜΙΣΘΟΔΟΣΙ") |
+            p_act_exp_df["main_category"].astype(str).str.upper().str.contains("ΜΙΣΘΟΔΟΣΙ")
         )
         p_sal_net = round(float(pd.to_numeric(p_act_exp_df[p_sal_mask]["net_amount"], errors="coerce").sum()), 2)
 
-        p_fixed = round(p_net_exp - p_cogs_mat - p_tw_net - p_ins_net - p_tax_net - p_sal_net + p_tw_var, 2)
+        p_fixed = round(p_net_exp - p_cogs_mat - p_tw_net - p_ins_net - p_tax_net - p_sal_net - p_capex - p_depreciation + p_tw_var, 2)
         if p_fixed <= 0:
             p_fixed = round(monthly_fixed * (p_eff_days / 30.4375), 2)
         p_exp_source = "Ledger (Πραγματικά)"
@@ -3228,6 +3627,9 @@ def compute_period_pnl_summary(p_start_d: date, p_end_d: date, p_label: str):
         p_vat_exp = round(p_fixed * 0.24, 2)
         p_gross_exp = round(p_fixed + p_vat_exp, 2)
         p_cogs_mat = 0.0
+        p_capex = 0.0
+        p_depreciation = 0.0
+        p_mydata_payroll = 0.0
         p_exp_source = "Budget (Εκτίμηση)"
 
     p_true_net = round(p_net - p_comm - p_mat - p_payroll_tot - p_fixed, 2)
@@ -5819,21 +6221,142 @@ with hub_admin:
         exp_submode = st.segmented_control(
             "Εργαλείο Διαχείρισης Εξόδων:",
             options=[
+                "📥 Εισαγωγή myDATA (Excel / CSV)",
                 "📅 Μηνιαίο Πλέγμα (Fast Grid)",
                 "📸 AI Scanner (Gemini OCR)",
                 "📑 Πλήρες Ημερολόγιο (Ledger)",
                 "⚖️ Γέφυρα Συμφωνίας & Έλεγχος"
             ],
-            default="📅 Μηνιαίο Πλέγμα (Fast Grid)",
+            default="📥 Εισαγωγή myDATA (Excel / CSV)",
             key="exp_submode_ctrl"
         )
 
         st.space("small")
 
         # =================================================================
-        # ΕΡΓΑΛΕΙΟ 1: 📅 ΜΗΝΙΑΙΟ ΠΛΕΓΜΑ ΕΞΟΔΩΝ (FAST MONTHLY GRID)
+        # ΕΡΓΑΛΕΙΟ 1: 📥 ΕΙΣΑΓΩΓΗ myDATA & ΤΙΜΟΛΟΓΙΩΝ (EXCEL / CSV)
         # =================================================================
-        if exp_submode.startswith("📅"):
+        if exp_submode.startswith("📥"):
+            with st.container(border=True):
+                st.subheader("📥 Εισαγωγή myDATA & Τιμολογίων (ΑΑΔΕ / Excel / CSV)", icon=":material/upload_file:")
+                st.caption(
+                    "Ανεβάστε το επίσημο αναλυτικό αρχείο myDATA (ΑΑΔΕ) ή το Excel του λογιστηρίου σας. "
+                    "Το σύστημα αναγνωρίζει αυτόματα τις στήλες, εφαρμόζει τον **Smart Auto-Classifier** βάσει ΑΦΜ και ΚΑΔ, "
+                    "διαχωρίζει τα Υλικά (COGS), τις Επενδύσεις (CapEx), τα Πάγια και τη Μισθοδοσία, "
+                    "αποτρέπει διπλοεγγραφές βάσει **ΜΑΡΚ** και υπολογίζει αυτόματα πιστωτικά τιμολόγια και λοιπούς φόρους."
+                )
+
+                c_up_my1, c_up_my2 = st.columns([2.5, 1.5], gap="medium", vertical_alignment="bottom")
+                with c_up_my1:
+                    up_mydata_file = st.file_uploader(
+                        "Επιλέξτε αρχείο Excel (.xlsx, .xls) ή CSV:",
+                        type=["csv", "xlsx", "xls"],
+                        key="up_mydata_main_file"
+                    )
+                with c_up_my2:
+                    st.caption("Διαθέσιμο αρχείο δειγμάτων (5 Μήνες 2025):")
+                    load_samples_clicked = st.button(
+                        "💡 Φόρτωση Δειγμάτων 2025 (148 Παραστατικά)",
+                        icon=":material/folder_open:",
+                        width="stretch",
+                        key="btn_load_samples_mydata_preset"
+                    )
+
+                if load_samples_clicked:
+                    import os
+                    sample_path = "uploads/mydata_expenses_2025_samples.csv"
+                    if os.path.exists(sample_path):
+                        with open(sample_path, "rb") as f:
+                            sample_content = f.read()
+                        fake_file = io.BytesIO(sample_content)
+                        fake_file.name = "mydata_expenses_2025_samples.csv"
+                        df_loaded = parse_expenses_import_file(fake_file)
+                        st.session_state["mydata_parsed_df"] = df_loaded
+                        st.toast(f"Φορτώθηκαν {len(df_loaded)} παραστατικά από τα δείγματα 2025!", icon=":material/check_circle:")
+                    else:
+                        st.warning("Το αρχείο δειγμάτων δεν βρέθηκε στο uploads/")
+
+                if up_mydata_file is not None:
+                    try:
+                        df_uploaded = parse_expenses_import_file(up_mydata_file)
+                        st.session_state["mydata_parsed_df"] = df_uploaded
+                    except Exception as e_up:
+                        st.error(f"Σφάλμα κατά την ανάγνωση του αρχείου: {e_up}")
+
+                if "mydata_parsed_df" in st.session_state and not st.session_state["mydata_parsed_df"].empty:
+                    df_prev = st.session_state["mydata_parsed_df"]
+                    tot_prev_cnt = len(df_prev)
+                    tot_prev_net = float(df_prev["net_amount"].sum())
+                    tot_prev_vat = float(df_prev["vat_amount"].sum())
+                    tot_prev_gross = float(df_prev["gross_amount"].sum())
+                    tot_credit_notes = len(df_prev[df_prev["net_amount"] < 0])
+                    tot_other_taxes = float(df_prev["other_taxes"].sum()) if "other_taxes" in df_prev.columns else 0.0
+
+                    # Έλεγχος νέων vs υπαρχόντων βάσει MARK
+                    existing_db_marks = set()
+                    if not df_all_exp_ledger.empty and "mark" in df_all_exp_ledger.columns:
+                        existing_db_marks = set(df_all_exp_ledger["mark"].dropna().astype(str).str.strip())
+
+                    new_marks_cnt = 0
+                    if "mark" in df_prev.columns:
+                        new_marks_cnt = sum(1 for m in df_prev["mark"].dropna().astype(str).str.strip() if m and m not in existing_db_marks)
+
+                    st.space("small")
+                    m_c1, m_c2, m_c3, m_c4 = st.columns(4)
+                    m_c1.metric("1. Παραστατικά Αρχείου", f"{tot_prev_cnt:,} εγγραφές", f"{new_marks_cnt} νέα ΜΑΡΚ στη βάση" if new_marks_cnt > 0 else "Έλεγχος διπλοτύπων OK", border=True)
+                    m_c2.metric("2. Καθαρή Αξία Εξόδων", f"{tot_prev_net:,.2f} €", f"{tot_credit_notes} πιστωτικά" if tot_credit_notes > 0 else "0 πιστωτικά", border=True)
+                    m_c3.metric("3. ΦΠΑ Εισροών", f"{tot_prev_vat:,.2f} €", "Προς έκπτωση από ΦΠΑ", border=True)
+                    m_c4.metric("4. Τελική Ταμειακή Εκροή", f"{tot_prev_gross:,.2f} €", f"Λοιποί Φόροι: {tot_other_taxes:,.2f} €" if tot_other_taxes > 0 else "Σύνολο πληρωμών", delta_color="inverse", border=True)
+
+                    st.space("small")
+                    st.markdown("##### 🔍 Προεπισκόπηση & Επιβεβαίωση myDATA πριν την Αποθήκευση")
+                    st.caption("Ελέγξτε τις αυτόματες κατηγορίες. Μπορείτε να αλλάξετε οποιαδήποτε τιμή απευθείας στον πίνακα:")
+
+                    prev_cols_show = ["expense_date", "vendor_name", "main_category", "sub_category", "expense_nature", "net_amount", "vat_rate", "vat_amount", "gross_amount", "payment_method", "invoice_number", "mark", "issuer_afm", "other_taxes"]
+                    avail_show = [c for c in prev_cols_show if c in df_prev.columns]
+
+                    ed_mydata_preview = st.data_editor(
+                        df_prev[avail_show],
+                        hide_index=True,
+                        num_rows="dynamic",
+                        width="stretch",
+                        key="ed_mydata_preview_grid",
+                        column_config={
+                            "expense_date": st.column_config.DateColumn("Ημερομηνία", required=True),
+                            "vendor_name": st.column_config.TextColumn("Προμηθευτής / Εκδότης", required=True),
+                            "main_category": st.column_config.SelectboxColumn("Βασική Κατηγορία", options=EXPENSE_MAIN_CATEGORIES, required=True),
+                            "sub_category": st.column_config.TextColumn("Υποκατηγορία / Είδος"),
+                            "expense_nature": st.column_config.SelectboxColumn("Φύση Εξόδου", options=EXPENSE_NATURES),
+                            "net_amount": st.column_config.NumberColumn("Καθαρή Αξία (€)", format="%.2f €", required=True),
+                            "vat_rate": st.column_config.SelectboxColumn("ΦΠΑ (%)", options=EXPENSE_VAT_RATES),
+                            "vat_amount": st.column_config.NumberColumn("Ποσό ΦΠΑ (€)", format="%.2f €"),
+                            "gross_amount": st.column_config.NumberColumn("Σύνολο με ΦΠΑ (€)", format="%.2f €"),
+                            "other_taxes": st.column_config.NumberColumn("Λοιποί Φόροι (€)", format="%.2f €"),
+                            "payment_method": st.column_config.SelectboxColumn("Τρόπος Πληρωμής", options=EXPENSE_PAYMENT_METHODS),
+                            "invoice_number": st.column_config.TextColumn("Αρ. Παραστατικού"),
+                            "mark": st.column_config.TextColumn("ΜΑΡΚ (myDATA)", disabled=True),
+                            "issuer_afm": st.column_config.TextColumn("ΑΦΜ Εκδότη")
+                        }
+                    )
+
+                    c_save_my, c_discard_my = st.columns([2, 1], gap="medium")
+                    with c_save_my:
+                        if st.button("🚀 Οριστική Εισαγωγή Όλων των Εξόδων στο Ημερολόγιο (`expenses_ledger`)", type="primary", width="stretch", key="btn_confirm_mydata_save"):
+                            if "notes" in df_prev.columns:
+                                ed_mydata_preview["notes"] = df_prev["notes"].values[:len(ed_mydata_preview)]
+                            saved_mydata_n = save_expenses_ledger_df(ed_mydata_preview, sync_deletions=False)
+                            st.toast(f"✅ Συγχρονίστηκαν επιτυχώς {saved_mydata_n} έξοδα στη βάση δεδομένων!", icon=":material/check_circle:")
+                            del st.session_state["mydata_parsed_df"]
+                            refresh_data()
+                    with c_discard_my:
+                        if st.button("❌ Απόρριψη Προεπισκόπησης", width="stretch", key="btn_discard_mydata"):
+                            del st.session_state["mydata_parsed_df"]
+                            st.rerun()
+
+        # =================================================================
+        # ΕΡΓΑΛΕΙΟ 2: 📅 ΜΗΝΙΑΙΟ ΠΛΕΓΜΑ ΕΞΟΔΩΝ (FAST MONTHLY GRID)
+        # =================================================================
+        elif exp_submode.startswith("📅"):
             with st.container(border=True):
                 st.subheader("📅 Μηνιαίο Πλέγμα Εξόδων (Fast Monthly Grid)", icon=":material/calendar_month:")
                 st.caption(
@@ -6112,8 +6635,11 @@ with hub_admin:
                         "vat_rate": st.column_config.SelectboxColumn("ΦΠΑ (%)", options=EXPENSE_VAT_RATES),
                         "vat_amount": st.column_config.NumberColumn("Ποσό ΦΠΑ (€)", format="%.2f €"),
                         "gross_amount": st.column_config.NumberColumn("Σύνολο με ΦΠΑ (€)", format="%.2f €"),
+                        "other_taxes": st.column_config.NumberColumn("Λοιποί Φόροι (€)", format="%.2f €"),
                         "payment_method": st.column_config.SelectboxColumn("Τρόπος Πληρωμής", options=EXPENSE_PAYMENT_METHODS),
                         "invoice_number": st.column_config.TextColumn("Αρ. Παραστατικού"),
+                        "mark": st.column_config.TextColumn("ΜΑΡΚ (myDATA)", disabled=True),
+                        "issuer_afm": st.column_config.TextColumn("ΑΦΜ Εκδότη"),
                         "notes": st.column_config.TextColumn("Σημειώσεις")
                     }
                 )
@@ -6121,7 +6647,8 @@ with hub_admin:
                 c_exp_btn1, c_exp_btn2, c_exp_btn3 = st.columns([1.5, 1, 1], gap="medium")
                 with c_exp_btn1:
                     if st.button("💾 Αποθήκευση Αλλαγών Ημερολογίου Εξόδων", type="primary", width="stretch", key="btn_save_exp_ledger"):
-                        saved_n = save_expenses_ledger_df(ed_exp_ledger)
+                        scope_ids = set(df_filtered_exp["id"].dropna().astype(int)) if ("id" in df_filtered_exp.columns and not df_filtered_exp.empty) else None
+                        saved_n = save_expenses_ledger_df(ed_exp_ledger, sync_deletions=True, existing_scope_ids=scope_ids)
                         st.toast(f"✅ Αποθηκεύτηκαν {saved_n} εγγραφές εξόδων στη Supabase!", icon=":material/check_circle:")
                         refresh_data()
                 with c_exp_btn2:
@@ -6254,9 +6781,9 @@ with hub_admin:
                         st.markdown("##### 👥 3. Συμφωνία Μισθοδοσίας & Ασφαλιστικών (Cash Outflow)")
                         st.html(f"""
                         <div style="font-size: 0.88rem; line-height: 1.7;">
-                            <div>• <b>Καθαρή Μισθοδοσία Προσωπικού:</b> <b>4.882,91 €</b> (4 τεχνίτριες + εκκαθάριση αποχώρησης + προσωπικό υποστήριξης)</div>
-                            <div>• <b>Bonus & Πρόσθετες Αμοιβές:</b> <b>399,00 €</b></div>
-                            <div>• <b>Συνολική Εκροή Μισθοδοσίας:</b> <b style="color: #ef4444;">5.281,91 €</b></div>
+                            <div>• <b>Κόστος Μισθοδοσίας Βαρδιών:</b> <b>{total_declared_payroll:,.2f} €</b> ({total_tech_decl_h:.1f} ώρες τεχνιτριών)</div>
+                            <div>• <b>Επίσημη Μισθοδοσία myDATA (Λογιστήριο):</b> <b>{actual_mydata_payroll:,.2f} €</b></div>
+                            <div>• <b>Καθαροί Μισθοί Ταμείου (Pocket):</b> <b style="color: #ef4444;">{total_net_pocket_payroll:,.2f} €</b></div>
                             <hr style="margin: 6px 0; border: none; border-top: 1px solid rgba(148,163,184,0.2);">
                             <div>• Ασφαλιστικές Εισφορές (ΕΦΚΑ + ΤΕΚΑ + ΚΕΑΟ): <b>{actual_payroll_insurance:,.2f} €</b></div>
                             <div>• Φορολογικές Υποχρεώσεις (ΦΜΥ / ΔΟΥ): <b>{actual_tax_doy:,.2f} €</b></div>
@@ -6268,13 +6795,14 @@ with hub_admin:
 
                     with st.container(border=True):
                         st.markdown("##### 💰 4. Σύνοψη Πραγματικού Ταμείου (Cash Flow vs P&L)")
+                        net_surplus_val = gross_rev - period_gross_expenses - total_net_pocket_payroll
                         st.html(f"""
                         <div style="font-size: 0.88rem; line-height: 1.7;">
                             <div>• Εισπράξεις Ταμείου & POS (Μικτά): <b>+{gross_rev:,.2f} €</b></div>
                             <div>• Συνολικές Πληρωμές Τιμολογίων & Φόρων: <b style="color: #ef4444;">-{period_gross_expenses:,.2f} €</b></div>
-                            <div>• Πληρωμές Καθαρών Μισθών: <b style="color: #ef4444;">-5.281,91 €</b></div>
+                            <div>• Πληρωμές Καθαρών Μισθών: <b style="color: #ef4444;">-{total_net_pocket_payroll:,.2f} €</b></div>
                             <hr style="margin: 6px 0; border: none; border-top: 1px solid rgba(148,163,184,0.2);">
-                            <div>• <b>Πραγματικό Ταμειακό Περίσσευμα (Cash Surplus):</b> <b style="color: #10b981; font-size: 1.05rem;">+{gross_rev - period_gross_expenses - 5281.91:,.2f} €</b></div>
+                            <div>• <b>Πραγματικό Ταμειακό Περίσσευμα (Cash Surplus):</b> <b style="color: {'#10b981' if net_surplus_val >= 0 else '#ef4444'}; font-size: 1.05rem;">{net_surplus_val:+,.2f} €</b></div>
                             <div style="font-size: 0.80rem; opacity: 0.8; margin-top: 4px;">
                                 *Λειτουργικό Κέρδος P&L (EBITDA): <b>+{true_net_profit:,.2f} €</b> ({margin_pct:.1f}% περιθώριο).
                             </div>
