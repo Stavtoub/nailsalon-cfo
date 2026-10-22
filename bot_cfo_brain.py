@@ -19,6 +19,8 @@ CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 NAIL_DIR = r"C:\Users\TOS\Desktop\NailSalon_CFO"
 SECRETS_FILE = os.path.join(NAIL_DIR, ".streamlit", "secrets.toml")
 
+DAYS_GR = ["Δευτέρα", "Τρίτη", "Τετάρτη", "Πέμπτη", "Παρασκευή", "Σάββατο"]
+
 def load_secrets():
     secrets = {}
     if os.path.exists(SECRETS_FILE):
@@ -46,6 +48,21 @@ def get_gemini_client():
         return None
     return genai.Client(api_key=api_key)
 
+def calc_shift_hours(shift_str):
+    if not shift_str or pd.isna(shift_str):
+        return 0.0
+    s = str(shift_str).strip()
+    if not s or "κλειστ" in s.lower() or "ρεπ" in s.lower() or s == "-":
+        return 0.0
+    intervals = []
+    matches = re.findall(r'(\d{1,2})[:.](\d{2})\s*[-–—]\s*(\d{1,2})[:.](\d{2})', s)
+    for h1, m1, h2, m2 in matches:
+        st_h = int(h1) + int(m1) / 60.0
+        en_h = int(h2) + int(m2) / 60.0
+        if en_h > st_h:
+            intervals.append((st_h, en_h))
+    return round(sum(en - st for st, en in intervals), 2)
+
 def execute_cfo_diagnostics(user_query: str) -> str:
     """
     Executes a dynamic forensic query using Gemini 3.8 Flash with Universal Tools
@@ -68,15 +85,15 @@ def execute_cfo_diagnostics(user_query: str) -> str:
         """
         Αναζητά ραντεβού, τζίρο και επιδόσεις τεχνιτριών από τον πίνακα bookings_master.
         Παράμετροι:
-        - start_date: Ημερομηνία έναρξης σε μορφή YYYY-MM-DD (π.χ. '2026-10-21' ή '2025-10-21').
-        - end_date: Ημερομηνία λήξης σε μορφή YYYY-MM-DD.
+        - start_date: Ημερομηνία έναρξης σε YYYY-MM-DD (π.χ. '2026-10-21' ή '2025-10-21').
+        - end_date: Ημερομηνία λήξης σε YYYY-MM-DD.
         - staff_name: Όνομα τεχνίτριας (π.χ. 'Κατερίνα', 'Δόμνα', 'Νάντια').
         - service_keyword: Λέξη-κλειδί υπηρεσίας (π.χ. 'Ημιμόνιμο', 'Gel', 'Πεντικιούρ').
         - status_group: Κατάσταση ('COMPLETED', 'CONFIRMED', 'CANCELLED').
         """
         try:
             q = sb.table("bookings_master").select(
-                "appointment_date, appointment_time, staff_name, raw_service, gross_price, status_group, commission_fee, net_revenue"
+                "appointment_date, appointment_time, staff_name, raw_service, gross_price, status_group, commission_fee, net_revenue, duration_minutes"
             )
             if start_date:
                 q = q.gte("appointment_date", start_date)
@@ -91,7 +108,6 @@ def execute_cfo_diagnostics(user_query: str) -> str:
 
             rows = q.order("appointment_date", desc=False).limit(limit).execute().data or []
 
-            total_gross = sum(float(r.get("gross_price", 0.0) or 0.0) for r in rows)
             completed_gross = sum(float(r.get("gross_price", 0.0) or 0.0) for r in rows if r.get("status_group") == "COMPLETED")
             confirmed_gross = sum(float(r.get("gross_price", 0.0) or 0.0) for r in rows if r.get("status_group") == "CONFIRMED")
             cancelled_rows = [r for r in rows if r.get("status_group") == "CANCELLED"]
@@ -101,10 +117,12 @@ def execute_cfo_diagnostics(user_query: str) -> str:
             for r in active_rows:
                 st = r.get("staff_name", "Άγνωστη")
                 p = float(r.get("gross_price", 0.0) or 0.0)
+                dur = float(r.get("duration_minutes", 0) or 0) / 60.0
                 if st not in staff_breakdown:
-                    staff_breakdown[st] = {"count": 0, "gross": 0.0, "services": []}
+                    staff_breakdown[st] = {"count": 0, "gross": 0.0, "hours": 0.0, "services": []}
                 staff_breakdown[st]["count"] += 1
                 staff_breakdown[st]["gross"] = round(staff_breakdown[st]["gross"] + p, 2)
+                staff_breakdown[st]["hours"] = round(staff_breakdown[st]["hours"] + dur, 2)
                 srv = r.get("raw_service")
                 if srv and srv not in staff_breakdown[st]["services"]:
                     staff_breakdown[st]["services"].append(srv)
@@ -124,12 +142,74 @@ def execute_cfo_diagnostics(user_query: str) -> str:
                 "cancelled_potential_turnover": round(sum(float(r.get("gross_price", 0.0) or 0.0) for r in cancelled_rows), 2),
                 "staff_breakdown": staff_breakdown,
                 "top_services": sorted(service_counts.items(), key=lambda x: x[1], reverse=True)[:6],
-                "sample_appointments": active_rows[:15]
+                "sample_appointments": active_rows[:12]
             }
         except Exception as e:
             return {"error": f"Error querying bookings: {str(e)}"}
 
-    # Universal Tool 2: Query Expenses
+    # Universal Tool 2: Query Shift Schedules & Real Idle Time
+    def query_shift_schedule(target_date: str) -> dict:
+        """
+        Ανακτά το πραγματικό καταχωρημένο εβδομαδιαίο πρόγραμμα βαρδιών για μια συγκεκριμένη ημερομηνία (YYYY-MM-DD),
+        και υπολογίζει επακριβώς:
+        - Πραγματικές ώρες βάρδιας (π.χ. 18:00 - 20:00 -> 2h, 14:30 - 20:30 -> 6h, 10:00 - 18:00 -> 8h).
+        - Ώρες ραντεβού (παραγωγικός χρόνος).
+        - Πραγματικό κενό χρόνο (idle hours = βάρδια - ραντεβού).
+        - Ποσοστό αξιοποίησης (utilization %).
+        """
+        try:
+            dt = datetime.strptime(target_date.strip(), "%Y-%m-%d")
+            mon = dt.date() - timedelta(days=dt.weekday())
+            week_key = "WEEK_" + mon.strftime("%Y-%m-%d")
+
+            day_idx = dt.weekday()
+            if day_idx > 5:
+                return {"error": "Κυριακή: Το κατάστημα είναι κλειστό."}
+            day_name = DAYS_GR[day_idx]
+
+            res = sb.table("config_services").select("*").eq("service_name", week_key).execute()
+            if not res.data:
+                return {"error": f"Δεν βρέθηκε καταχωρημένο πρόγραμμα βαρδιών για την εβδομάδα {week_key} στη βάση."}
+
+            shifts = json.loads(res.data[0].get("price_variants_json") or "[]")
+
+            # Bookings for that day
+            b_res = sb.table("bookings_master").select("staff_name, duration_minutes, status_group").eq("appointment_date", target_date).execute()
+            staff_booked = {}
+            for b in (b_res.data or []):
+                if b.get("status_group") != "CANCELLED":
+                    st = str(b.get("staff_name", "")).strip()
+                    dur = float(b.get("duration_minutes", 0) or 0) / 60.0
+                    staff_booked[st] = round(staff_booked.get(st, 0.0) + dur, 2)
+
+            summary = []
+            for s in shifts:
+                name = s["staff_name"]
+                shift_str = s.get(day_name, "")
+                shift_h = calc_shift_hours(shift_str)
+                booked_h = staff_booked.get(name, 0.0)
+                if shift_h > 0 or booked_h > 0:
+                    idle_h = round(max(0.0, shift_h - booked_h), 2)
+                    util = round((booked_h / shift_h) * 100.0, 1) if shift_h > 0 else 0.0
+                    summary.append({
+                        "staff_name": name,
+                        "declared_shift": shift_str or "Ρεπό / Χωρίς Βάρδια",
+                        "shift_hours": shift_h,
+                        "booked_hours": booked_h,
+                        "idle_hours": idle_h,
+                        "utilization_pct": util
+                    })
+
+            return {
+                "target_date": target_date,
+                "day_name": day_name,
+                "week_program": week_key,
+                "staff_utilization": summary
+            }
+        except Exception as e:
+            return {"error": f"Error querying shift schedule: {str(e)}"}
+
+    # Universal Tool 3: Query Expenses
     def query_expenses(
         start_date: str = "",
         end_date: str = "",
@@ -143,9 +223,9 @@ def execute_cfo_diagnostics(user_query: str) -> str:
         Παράμετροι:
         - start_date: Ημερομηνία έναρξης σε YYYY-MM-DD.
         - end_date: Ημερομηνία λήξης σε YYYY-MM-DD.
-        - vendor_name: Όνομα ή μέρος του προμηθευτή (π.χ. 'Metlen', 'Miss Kiss', 'ΔΕΗ', 'Σωτηρίου').
-        - main_category: Βασική κατηγορία (π.χ. 'COGS', 'Στέγασης', 'Ωφελείας', 'Marketing').
-        - expense_nature: Φύση εξόδου ('Πάγιο', 'Μεταβλητό', 'COGS', 'CapEx').
+        - vendor_name: Όνομα ή μέρος του προμηθευτή (π.χ. 'Metlen', 'Miss Kiss', 'ΔΕΗ', 'Σωτηρίου', 'Μισθοδοσία').
+        - main_category: Βασική κατηγορία (π.χ. 'COGS', 'Στέγασης', 'Ωφελείας', 'Marketing', 'Μισθοδοσία').
+        - expense_nature: Φύση εξόδου ('Πάγιο', 'Μεταβλητό', 'COGS', 'CapEx', 'Payroll').
         """
         try:
             q = sb.table("expenses_ledger").select("*")
@@ -185,12 +265,12 @@ def execute_cfo_diagnostics(user_query: str) -> str:
                 "total_vat_amount": round(total_vat, 2),
                 "categories_breakdown": sorted(cat_summary.items(), key=lambda x: x[1], reverse=True),
                 "top_vendors": sorted(vendor_summary.items(), key=lambda x: x[1], reverse=True)[:8],
-                "sample_expenses": rows[:12]
+                "sample_expenses": rows[:10]
             }
         except Exception as e:
             return {"error": f"Error querying expenses: {str(e)}"}
 
-    # Universal Tool 3: Get Financial Summary & P&L
+    # Universal Tool 4: Get Financial Summary & P&L
     def get_financial_summary(start_date: str = "", end_date: str = "") -> dict:
         """
         Υπολογίζει συνολικό ισοζύγιο P&L (Τζίρος, Έξοδα, Υλικά COGS, Καθαρό Κέρδος) για μια περίοδο.
@@ -218,17 +298,17 @@ def execute_cfo_diagnostics(user_query: str) -> str:
         except Exception as e:
             return {"error": f"Error computing financial summary: {str(e)}"}
 
-    # Universal Tool 4: Get Staff List & Details
+    # Universal Tool 5: Get Staff List & Declared Info
     def get_staff_info() -> dict:
-        """Επιστρέφει τη λίστα με τις επίσημες τεχνίτριες και το ωρομίσθιό τους."""
+        """Επιστρέφει τη λίστα με τις επίσημες τεχνίτριες και τις εβδομαδιαίες δηλωμένες ώρες."""
         try:
-            staff_rows = sb.table("config_staff").select("staff_name, hourly_cost").execute().data or []
+            staff_rows = sb.table("config_staff").select("staff_name, weekly_hours_declared, hourly_cost").execute().data or []
             return {"staff": staff_rows}
         except Exception as e:
             return {"error": str(e)}
 
     # Configure Gemini with Universal Tools
-    tools_list = [query_bookings, query_expenses, get_financial_summary, get_staff_info]
+    tools_list = [query_bookings, query_shift_schedule, query_expenses, get_financial_summary, get_staff_info]
 
     today_dt = datetime.now()
     today_str = today_dt.strftime("%Y-%m-%d")
@@ -240,20 +320,25 @@ def execute_cfo_diagnostics(user_query: str) -> str:
 
     ΠΛΑΙΣΙΟ ΧΡΟΝΟΥ:
     - Σημερινή ημερομηνία συστήματος: {today_str} (Έτος {year_str}).
-    - Σημείωση: Στη βάση δεδομένων υπάρχουν ιστορικά δεδομένα για το 2024, 2025 και 2026 (με ραντεβού που φτάνουν έως και μέσα Νοεμβρίου 2026).
+    - Στη βάση δεδομένων υπάρχουν ιστορικά δεδομένα για το 2024, 2025 και 2026 (με ραντεβού που φτάνουν έως και μέσα Νοεμβρίου 2026).
 
     ΚΡΙΣΙΜΟΙ ΚΑΝΟΝΕΣ:
     1. ΠΟΤΕ ΜΗΝ ΜΑΝΤΕΥΕΙΣ Ή ΥΠΟΘΕΤΕΙΣ ΝΟΥΜΕΡΑ! 
-       Για οποιαδήποτε ερώτηση αφορά τζίρο, ραντεβού, έξοδα, λογαριασμούς, τεχνίτριες ή κέρδη, 
-       ΠΡΕΠΕΙ ΝΑ ΚΑΛΕΣΕΙΣ ΤΑ ΚΑΤΑΛΛΗΛΑ ΕΡΓΑΛΕΙΑ (query_bookings, query_expenses, get_financial_summary).
-    2. Αν ο χρήστης αναφέρει συγκεκριμένη ημέρα (π.χ. '21/10', 'χθες', 'σήμερα', '21 Οκτωβρίου'):
-       - Κατασκεύασε την ημερομηνία σε μορφή YYYY-MM-DD (π.χ. '{year_str}-10-21').
-       - Αν η αναζήτηση για το {year_str} δεν έχει δεδομένα, έλεγξε και το προηγούμενο έτος (π.χ. 2025).
-    3. ΜΟΡΦΟΠΟΙΗΣΗ TELEGRAM HTML:
+       Για οποιαδήποτε ερώτηση αφορά τζίρο, ραντεβού, έξοδα, βάρδιες, τεχνίτριες ή κέρδη, 
+       ΠΡΕΠΕΙ ΝΑ ΚΑΛΕΣΕΙΣ ΤΑ ΚΑΤΑΛΛΗΛΑ ΕΡΓΑΛΕΙΑ.
+    2. ΠΡΟΓΡΑΜΜΑ ΒΑΡΔΙΩΝ & ΚΕΝΟΣ ΧΡΟΝΟΣ (IDLE TIME):
+       - Για ερωτήσεις σχετικά με πρόγραμμα εργασίας, βάρδιες, ώρες προσέλευσης/αποχώρησης, παραγωγικό χρόνο ή κενό χρόνο,
+         ΚΑΛΕΣΕ ΤΟ ΕΡΓΑΛΕΙΟ `query_shift_schedule(target_date)`.
+       - Στη βάση ΥΠΑΡΧΕΙ ΚΑΤΑΧΩΡΗΜΕΝΟ ΤΟ ΠΛΗΡΕΣ ΠΡΟΓΡΑΜΜΑ ΒΑΡΔΙΩΝ (config_services με category '__SHIFT_SCHEDULE__').
+       - ΜΗΝ υποθέτεις ποτέ αυθαίρετο 8ωρο για όλες! Χρησιμοποίησε τις πραγματικές δηλωμένες βάρδιες (π.χ. Νάντια 2h ή 3h, Κατερίνα 6h, κλπ).
+    3. ΚΟΣΤΟΣ ΜΙΣΘΟΔΟΣΙΑΣ:
+       - Προσοχή: Το '7,50 €/ώρα' ήταν ένα απλό αρχικό παράδειγμα (default placeholder) και ΔΕΝ αποτελεί το πραγματικό ενιαίο ωρομίσθιο.
+       - Οι πραγματικές μισθοδοσίες είναι καταχωρημένες μηνιαία στα myDATA έξοδα (κατηγορία 'Μισθοδοσία & Εισφορές (myDATA)').
+       - Μην αναφέρεις flat 7,50 €/ώρα σαν να είναι ο πραγματικός μισθός τους.
+    4. ΜΟΡΦΟΠΟΙΗΣΗ TELEGRAM HTML:
        - Χρησιμοποίησε <b>έντονα</b> για νούμερα, ποσά (€), ονόματα και τίτλους.
-       - Χρησιμοποίησε <i>πλάγια</i> για επεξηγήσεις και συμβουλές.
-       - Χρησιμοποίησε <code>κώδικα</code> για IDs ή αριθμούς παραστατικών.
-       - Χρησιμοποίησε ευδιάκριτα bullet points (•) και κατάλληλα emojis (💶, 📊, 👥, 💅, 📁).
+       - Χρησιμοποίησε <i>πλάγια</i> για επεξηγήσεις.
+       - Χρησιμοποίησε ευδιάκριτα bullet points (•) και κατάλληλα emojis (💶, 📊, ⏱️, 👥, 💅).
        - ΜΗΝ χρησιμοποιείς markdown headers (### ή **). Χρησιμοποίησε ΑΠΟΚΛΕΙΣΤΙΚΑ Telegram HTML tags.
     """
 
