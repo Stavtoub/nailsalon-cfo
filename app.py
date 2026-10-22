@@ -1256,7 +1256,7 @@ def save_payroll_profiles_df(df_ed: pd.DataFrame, auto_recalc_rates: bool = True
             staff_table_rows.append({
                 "staff_name": s_name,
                 "hourly_cost": h_cost if role_t == "Τεχνίτρια" else 0.0,
-                "weekly_hours_declared": wk_h
+                "weekly_hours_declared": int(round(wk_h))
             })
 
     try:
@@ -3732,12 +3732,14 @@ def build_dynamic_cfo_diagnostics():
                 for _, r in core_low_df.head(3).iterrows()
             ])
 
+    avg_tech_h = round(labor_prod_total / total_tech_prod_h, 2) if total_tech_prod_h > 0 else (round(float(df_staff_db[df_staff_db['hourly_cost'] > 0]['hourly_cost'].mean()), 2) if not df_staff_db.empty else 7.85)
+
     if total_tech_prod_h > 0 and net_per_prod_h < 20.50:
         hourly_gap_eur = round((target_net_per_h - net_per_prod_h) * total_tech_prod_h, 2)
         mat_per_h = mat_total / total_tech_prod_h
         comm_per_h = comm_total / total_tech_prod_h
         fix_per_h = fixed_expenses / total_tech_prod_h
-        rem_per_h = net_per_prod_h - 7.50 - mat_per_h - comm_per_h - fix_per_h
+        rem_per_h = net_per_prod_h - avg_tech_h - mat_per_h - comm_per_h - fix_per_h
         free_note = f"<br>• Εκτελέστηκαν επίσης <b>{free_appts_cnt} δωρεάν ραντεβού (0€)</b> που κατανάλωσαν χρόνο & υλικά." if free_appts_cnt >= 5 else ""
         diagnostics.append({
             "severity_rank": 2 if net_per_prod_h < 18.50 else 1,
@@ -3748,7 +3750,7 @@ def build_dynamic_cfo_diagnostics():
             "body": (
                 f"Όταν η καρέκλα δουλεύει 100% ασταμάτητα, <b>1 ώρα ραντεβού</b> φέρνει <b>{gross_per_prod_h:.2f} €/h με ΦΠΑ</b> "
                 f"(μόλις <b>{net_per_prod_h:.2f} €/h χωρίς ΦΠΑ</b> έναντι υγιούς στόχου <b>21,00 €/h</b>). "
-                f"Αφαιρώντας τεχνίτρια (<b>-7,50€/h</b>), υλικά (<b>-{mat_per_h:.2f}€/h</b>), TW (<b>-{comm_per_h:.2f}€/h</b>) & πάγια (<b>-{fix_per_h:.2f}€/h</b>), "
+                f"Αφαιρώντας τεχνίτρια (<b>-{avg_tech_h:.2f}€/h</b>), υλικά (<b>-{mat_per_h:.2f}€/h</b>), TW (<b>-{comm_per_h:.2f}€/h</b>) & πάγια (<b>-{fix_per_h:.2f}€/h</b>), "
                 f"μένουν μόλις <b>{rem_per_h:+.2f} €/ώρα</b>!<br>"
                 f"• Υπηρεσίες όγκου που ρίχνουν το ωριαίο έσοδο: {low_hourly_srvs_str or 'Βασικές υπηρεσίες μεγάλου χρόνου'}."
                 f"{free_note}"
@@ -3764,7 +3766,7 @@ def build_dynamic_cfo_diagnostics():
             "title": f"Υψηλό Καθαρό Έσοδο ανά Παραγωγική Ώρα ({net_per_prod_h:.2f} €/h προ ΦΠΑ)",
             "body": (
                 f"Κάθε παραγωγική ώρα ραντεβού αποδίδει <b>{gross_per_prod_h:.2f} €/h με ΦΠΑ</b> (<b>{net_per_prod_h:.2f} €/h προ ΦΠΑ</b>), "
-                f"καλύπτοντας άνετα το ωρομίσθιο τεχνίτριας (7,50€/h), τα υλικά και τα πάγια."
+                f"καλύπτοντας άνετα το ωρομίσθιο τεχνίτριας ({avg_tech_h:.2f}€/h), τα υλικά και τα πάγια."
             ),
             "action": "Διατηρήστε τη σχέση τιμής/χρόνου στις βασικές υπηρεσίες σας."
         })
@@ -3775,7 +3777,7 @@ def build_dynamic_cfo_diagnostics():
         f"{r['Τεχνίτρια']} ({r['Νεκρές Ώρες (Idle)']:.0f}h / -{r['Κόστος Νεκρού Χρόνου (€)']:,.0f}€)"
         for _, r in top_idle_staff.head(2).iterrows() if r['Νεκρές Ώρες (Idle)'] > 2
     ]) if not top_idle_staff.empty else ""
-    recoverable_idle_eur = round(max(0.0, (total_tech_decl_h * 0.70 - total_tech_prod_h) * 7.50), 2)
+    recoverable_idle_eur = round(max(0.0, (total_tech_decl_h * 0.70 - total_tech_prod_h) * avg_tech_h), 2)
 
     if overall_occ_pct < 56.0:
         diagnostics.append({
@@ -6100,7 +6102,13 @@ with hub_admin:
                     for _, r in edited_sched_df.iterrows()
                     if "δημ" not in str(r.get("staff_name", "")).lower()
                 )
-                st.caption(f"Σύνολο Εβδομαδιαίων Ωρών Τεχνιτριών: **{tech_hours_sum:.1f} ώρες/εβδ.** (Μισθοδοσία @ 7,50€/h: **{tech_hours_sum * 7.5:,.2f} €**)")
+                staff_h_lookup = {str(r['staff_name']).strip().lower(): float(r.get('hourly_cost', 0.0) or 0.0) for _, r in df_staff_db.iterrows()} if not df_staff_db.empty else {}
+                tech_weekly_cost = sum(
+                    sum(calc_shift_hours(r.get(d, "")) for d in DAYS_GR) * staff_h_lookup.get(str(r.get("staff_name", "")).strip().lower(), 0.0)
+                    for _, r in edited_sched_df.iterrows()
+                    if "δημ" not in str(r.get("staff_name", "")).lower()
+                )
+                st.caption(f"Σύνολο Εβδομαδιαίων Ωρών Τεχνιτριών: **{tech_hours_sum:.1f} ώρες/εβδ.** (Πραγματικό Κόστος Μισθοδοσίας Βαρδιών: **{tech_weekly_cost:,.2f} €**)")
 
                 c_btn1, c_btn2 = st.columns(2)
                 with c_btn1:
