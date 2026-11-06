@@ -1,8 +1,12 @@
 # Streamlit secrets & local credentials (NEVER COMMIT TO GITHUB)
 .streamlit/secrets.toml
+!.streamlit/secrets.toml.example
 .env
+.env.*
+!.env.example
 *.pem
 *.key
+*secret*.json
 
 # Python cache & virtual environments
 __pycache__/
@@ -12,12 +16,26 @@ __pycache__/
 venv/
 env/
 
-# Local data exports & backups
+# Logs, SQLite databases & Syncthing metadata
+logs/
+*.log
+*.sqlite
+*.sqlite-*
+*.db
+.stfolder/
+.stignore
+*.sync-conflict-*
+
+# Local data exports, staff files & backups
 *.csv
 uploads/
 treatwell_schedules*.json
 Προγραμμα/
+Μισθοδοσιες/
 app_backup.py
 *.sql
 *.png
-Μισθοδοσιες/
+
+# OS files
+.DS_Store
+Thumbs.db

@@ -784,7 +784,7 @@ import urllib.error
 
 DEFAULT_MODELS_BY_PROVIDER = {
     "Google Gemini": [
-        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite",
         "gemini-3.1-pro-preview",
         "gemini-4-argon",
         "gemini-pro-latest",
@@ -895,11 +895,11 @@ def _extract_multimodal_parts(contents):
                 mime_t = item.get("mime_type", "image/png")
     return "\n".join(text_parts), img_bytes, mime_t
 
-def call_gemini_smart(api_key, contents, expect_json=False, preferred_model="gemini-3.8-flash", provider="auto", thinking_level="HIGH"):
+def call_gemini_smart(api_key, contents, expect_json=False, preferred_model="gemini-3.5-flash-lite", provider="auto", thinking_level="HIGH"):
     """
     Κεντρικός δρομολογητής AI CFO:
-    Υποστηρίζει Google Gemini (gemini-3.8-flash με thinking=HIGH, Pro & Flash), OpenAI ChatGPT και Anthropic Claude.
-    Προεπιλογή: gemini-3.8-flash με thinking=HIGH για μέγιστη ευφυΐα και ελάχιστο κόστος.
+    Υποστηρίζει Google Gemini (gemini-3.5-flash-lite με thinking=HIGH, Pro & Flash), OpenAI ChatGPT και Anthropic Claude.
+    Προεπιλογή: gemini-3.5-flash-lite με thinking=HIGH για μέγιστη ευφυΐα και ελάχιστο κόστος.
     """
     prov = detect_ai_provider(api_key, preferred_model, provider)
 
@@ -1007,11 +1007,11 @@ def call_gemini_smart(api_key, contents, expect_json=False, preferred_model="gem
                 raise e
         raise last_err
 
-    # 3. Google Gemini (gemini-3.8-flash, Thinking=HIGH, με έξυπνο fallback αν υπάρξει 404 ή Quota 429)
+    # 3. Google Gemini (gemini-3.5-flash-lite, Thinking=HIGH, με έξυπνο fallback αν υπάρξει 404 ή Quota 429)
     client = genai.Client(api_key=api_key)
     candidate_models = [
         preferred_model,
-        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite",
         "gemini-3.1-pro-preview",
         "gemini-4-argon",
         "gemini-pro-latest",
@@ -2126,13 +2126,13 @@ def parse_expense_image_with_ai(
     mime_type: str,
     target_date: date,
     api_key: str,
-    model_name: str = "gemini-3.8-flash",
+    model_name: str = "gemini-3.5-flash-lite",
     provider: str = "Google Gemini",
     thinking_level: str = "HIGH"
 ) -> pd.DataFrame:
     """
     Διαβάζει screenshot ή φωτογραφία εξόδων (απόδειξη, χειρόγραφο μπλοκάκι, τραπεζικό statement, εκκαθαριστικό)
-    χρησιμοποιώντας το Gemini 3.8 Flash Vision (με High Thinking).
+    χρησιμοποιώντας το Gemini 3.5 Flash Lite Vision (με High Thinking).
     Επιστρέφει καθαρό DataFrame έτοιμο για εισαγωγή στο expenses_ledger.
     """
     if not api_key:
@@ -2458,7 +2458,7 @@ with st.sidebar:
                 else:
                     st.warning("Δεν βρέθηκαν επιπλέον μοντέλα ή το κλειδί δεν επέστρεψε λίστα.")
 
-        base_models = DEFAULT_MODELS_BY_PROVIDER.get(ai_provider_choice, ["gemini-3.8-flash"])
+        base_models = DEFAULT_MODELS_BY_PROVIDER.get(ai_provider_choice, ["gemini-3.5-flash-lite"])
         live_models = st.session_state["live_models_by_prov"].get(ai_provider_choice, [])
         merged_models = []
         for m_item in (base_models + live_models):
@@ -2468,16 +2468,16 @@ with st.sidebar:
         merged_models.append(CUSTOM_MODEL_OPT)
 
         chosen_model_opt = st.selectbox(
-            "Μοντέλο AI (Προεπιλογή: Gemini 3.8 Flash • High Thinking)",
+            "Μοντέλο AI (Προεπιλογή: Gemini 3.5 Flash Lite • High Thinking)",
             options=merged_models,
             index=0,
-            help="Προεπιλεγμένο μοντέλο: gemini-3.8-flash (ταχύτατο, οικονομικό και κορυφαίο σε συλλογισμό). Μπορείτε να επιλέξετε Pro/Argon ή οποιοδήποτε άλλο μοντέλο."
+            help="Προεπιλεγμένο μοντέλο: gemini-3.5-flash-lite (ταχύτατο, οικονομικό και κορυφαίο σε συλλογισμό). Μπορείτε να επιλέξετε Pro/Argon ή οποιοδήποτε άλλο μοντέλο."
         )
         if chosen_model_opt == CUSTOM_MODEL_OPT:
             custom_m_typed = st.text_input(
                 "Πληκτρολογήστε το ακριβές ID μοντέλου",
                 value=base_models[0],
-                placeholder="π.χ. gemini-3.8-flash, o3, gpt-5, claude-sonnet-4-6"
+                placeholder="π.χ. gemini-3.5-flash-lite, o3, gpt-5, claude-sonnet-4-6"
             )
             selected_gemini_model = custom_m_typed.strip() or base_models[0]
         else:
@@ -2487,7 +2487,7 @@ with st.sidebar:
             "🧠 Επίπεδο Συλλογισμού AI (Thinking)",
             options=["HIGH (Υψηλό - Μέγιστη Εμβάθυνση)", "MEDIUM (Ισορροπημένο)", "LOW (Γρήγορο)", "OFF (Ανενεργό)"],
             index=0,
-            help="Ελέγχει το βάθος συλλογισμού (extended thinking / reasoning tokens) του Gemini 3.8 Flash. Προεπιλογή: HIGH."
+            help="Ελέγχει το βάθος συλλογισμού (extended thinking / reasoning tokens) του Gemini 3.5 Flash Lite. Προεπιλογή: HIGH."
         )
         selected_thinking_level = "HIGH"
         if "MEDIUM" in sel_thinking_opt:
@@ -4522,7 +4522,7 @@ def render_shift_rebalancing_sandbox(sched_cap_matrix, demand_matrix, active_sta
 
 def render_ai_shift_rebalancer(sched_cap_matrix, demand_matrix, ov_blocks, un_blocks, avg_h_cost, selected_gemini_model, ai_provider_choice, selected_thinking_level, gemini_api_key):
     with st.container(border=True):
-        st.subheader("🤖 AI Smart Rebalancer: Πλάνο Νέου Εβδομαδιαίου Προγράμματος (Gemini 3.8 Flash High Thinking)", icon=":material/psychology:", help="Χρησιμοποιεί τεχνητή νοημοσύνη Gemini για να προτείνει το βέλτιστο εβδομαδιαίο πρόγραμμα βαρδιών εξαλείφοντας τον περιττό νεκρό χρόνο.")
+        st.subheader("🤖 AI Smart Rebalancer: Πλάνο Νέου Εβδομαδιαίου Προγράμματος (Gemini 3.5 Flash Lite High Thinking)", icon=":material/psychology:", help="Χρησιμοποιεί τεχνητή νοημοσύνη Gemini για να προτείνει το βέλτιστο εβδομαδιαίο πρόγραμμα βαρδιών εξαλείφοντας τον περιττό νεκρό χρόνο.")
         st.caption(
             "Το AI CFO αναλύει συνδυαστικά τα ακριβή δεδομένα ζήτησης ανά ώρα, εντοπίζει τις κόκκινες ζώνες υπερστελέχωσης "
             "και συντάσσει **συγκεκριμένο νέο εβδομαδιαίο ωράριο ανά ημέρα & κανόνες κρατήσεων στο Treatwell**."
@@ -6482,10 +6482,10 @@ with hub_admin:
         # =================================================================
         elif exp_submode.startswith("📸"):
             with st.container(border=True):
-                st.subheader("📸 AI Screenshot Scanner: Αυτόματη Ανάγνωση Εξόδων (Gemini 3.8 Flash Vision)", icon=":material/document_scanner:")
+                st.subheader("📸 AI Screenshot Scanner: Αυτόματη Ανάγνωση Εξόδων (Gemini 3.5 Flash Lite Vision)", icon=":material/document_scanner:")
                 st.caption(
                     "Ανεβάστε φωτογραφία ή screenshot από χειρόγραφο μπλοκάκι εξόδων, τραπεζικό statement, εκκαθαριστικό ή τιμολόγια. "
-                    "Το Gemini 3.8 Flash Vision (με High Thinking) αναγνωρίζει αυτόματα όλα τα ποσά, τους παρόχους, τους συντελεστές ΦΠΑ "
+                    "Το Gemini 3.5 Flash Lite Vision (με High Thinking) αναγνωρίζει αυτόματα όλα τα ποσά, τους παρόχους, τους συντελεστές ΦΠΑ "
                     "και ταξινομεί κάθε έξοδο στην κατάλληλη λογιστική κατηγορία."
                 )
 
